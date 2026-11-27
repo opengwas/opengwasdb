@@ -14,6 +14,13 @@
 > an alt, random or unplaced contig is dropped and logged as `lift_off_primary`
 > (#376).
 >
+> **Amended 27 Nov 2026 (issue #325): `lift_collision`, `admission/15`.** A row of a
+> lifted source whose site reaches an ALID that another lifted source locus reaches
+> too is dropped, logged and counted as `lift_collision`, after every other reason:
+> no source locus of the ALID takes it, since which one owns it is not knowable. The
+> Admission record's `lift_collisions.tsv` names each dropped source with its ALID
+> and rsid.
+>
 > **Clarified 7 Nov 2026 (issue #316): D5 has no reversed-indel case.** With
 > every indel's ALID spelt reference first, the rows of one (variant,
 > Analysis) are never an insertion and a deletion, so #316 removed the

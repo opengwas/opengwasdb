@@ -386,14 +386,43 @@ not `off_axis`; a reference extracted before #376 may still route a lifted row
 onto an alt contig, and the build drops that row and its ALID, and counts the row
 the same way. The release records the lift by `source_alid`, which `validate`
 judges (`variant_table.lifted_contig`, §20.0): it names the contig a lifted
-variant came from, and a row whose `source_alid` was blanked by a collision is not
-judged, so a release can be checked for the drop only where that column survives. A
+variant came from, and a row whose `source_alid` was blanked by a collision (a release
+built before #325) is not judged, so a release can be checked for the drop only where that column survives. A
 plain ALID list, or another Store's variant table, used as a Variant Reference
 records no source keys: the build keeps an alt-contig ALID it holds, as a GRCh38
 source's variant, and its row stays empty in the release, which
 `variant_table.lifted_contig` passes because the row's `source_alid` is the ALID itself.
 A release rebuilt from a published axis therefore holds the axis's alt-contig
 variants, with no associations, until the axis is rebuilt from the sources.
+
+**A lift collision drops every lifted source it reaches (#325).** Two source loci, each a
+source `(chromosome, position)`, that a lift puts on one ALID are a collision: a chain
+is not injective, and one hg19 position can map onto the hg38 position of another, on
+either strand. A build MUST drop every lifted source variant of such an ALID from every axis
+it builds and MUST NOT merge one source's statistics, rsID or `source_alid` with another's,
+nor keep one of them on the ALID by order of reading, since which one owns it is not
+knowable from the chain. The ALID is not stored on their account. One locus's alleles
+reported either way round (`A:G` and `G:A` at one position) are one variant, which the
+canonical ALID already merges, and are not a collision. The rule holds the lifted group to
+itself: a source already on the release's assembly that names the ALID is one variant seen
+from another build, as before (§4's `source_alid` ambiguity), and keeps it. Every builder
+that lifts applies the rule through the one placement (`place_sites`, which `place_union`,
+the fold's off-reference lift and `build-ragged-ssf` call), and `place_sites` refuses to
+return a lifted group with two loci on one ALID. A dropped site is still a lifted locus for the
+both-assemblies rule: a GRCh38 source that spells its key is dropped with it, so no
+dropped source's statistics route onto another row by its raw key. A build routed by
+a Variant Reference that names no rsids records the collisions its harvest's lift
+finds, and counts the rows of those the reference does not route; a reference frozen
+from an extraction before #325 is not re-checked, and may still route two loci onto
+one ALID. A plain ALID list routes an hg19 source's rows by identity, as if on the Store's assembly; that routing is #260's, and the collision rule reaches it once that lift goes through `place_union`. Each dropped source is recorded by both identities, in
+`lift_collisions.tsv` beside the Admission record's `admission.json` (`target_alid`,
+`source_key`, `rsid`, one row per source the build dropped rows of, never one it merely found colliding; the source key is spelled as its source wrote it, and the rsID is the one its own hg19 sources named it, empty where they named none, never a GRCh38 source's. The Hybrid fold's spill keeps a key upper-cased, so it takes both from what its harvest's lift recorded for that source, and refuses a site that lift did not drop; a fold under a reference that names its own rsIDs harvests nothing, and records the upper-cased key with an empty rsID), and each row of it is dropped,
+logged by source key and counted, per Analysis, as `lift_collision` (or, for a row of a source already on the Store's assembly that spells a dropped site's key, `lift_ambiguous`) (Admission rules
+`admission/15`; the Hybrid fold's, in its `fold` stage; `build-ragged-ssf`'s, in its own gate,
+and counted by neither `n_unmapped` nor a manifest field). There is no `validate` rule: a Store
+holds only the ALIDs that survived, and cannot say which source loci were dropped, so the
+guarantee is the build's. A release built before #325 may hold such an ALID, with its
+`source_alid` blank and the statistics of one source under the rsID of the other.
 
 A build that lifts a source variant from another Reference Assembly MUST project
 the variant onto the release's assembly using the chain block's orientation: on a
@@ -515,7 +544,8 @@ Analysis, as `lift_unmapped` (the chain places the site nowhere),
 `lift_ambiguous` (a Routing Key that a lifted source and a source already on
 GRCh38 both declare: two loci that share a string, dropped from the Analyses of
 both, as Pass 1's union drops it). Two source sites that lift onto one variant
-are one Analysis's duplicate rows, and the duplicate rule resolves them. A
+are not one Analysis's duplicate rows: they are two variants (a lift collision),
+and every row of both is dropped and counted as `lift_collision`. A
 lifted Store records `provenance.lift` as `build-ragged-besd` does, with
 `n_unmapped`, `n_off_primary` (sites lifted onto an alt, random or unplaced
 contig, counted as `lift_off_primary` and left out) and `n_ambiguous` (Routing
@@ -525,7 +555,7 @@ whose sources are all on GRCh38 records no `provenance.lift`. A build with any
 non-GRCh38 source holds every Analysis's admitted rows in memory until the lift
 has placed them; a GRCh38-only build reads one Analysis at a time. A lift that
 leaves no variant refuses the build, naming each Analysis's `lift_unmapped`,
-`lift_ambiguous` and `lift_off_primary` counts, after the Admission record is finished.
+`lift_ambiguous`, `lift_off_primary` and `lift_collision` counts, after the Admission record is finished.
 
 Cross-Store identity is:
 

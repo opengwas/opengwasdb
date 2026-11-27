@@ -652,6 +652,7 @@ def _ingest_lifted(
             per_analysis.append(recs)
             _print_ingest_summary(a, recs, n_consistent, n_conflicting)
     summary = record.finish()
+    record.write_lift_collisions(placement.collisions.sources)
     if not harvest.alid_variant:
         raise ValueError(_nothing_placed(summary))
     return _Ingested(
@@ -666,6 +667,7 @@ def _nothing_placed(summary: admission.AdmissionSummary) -> str:
         admission.Reason.LIFT_UNMAPPED,
         admission.Reason.LIFT_AMBIGUOUS,
         admission.Reason.LIFT_OFF_PRIMARY,
+        admission.Reason.LIFT_COLLISION,
     )
     per_analysis = "; ".join(
         f"analysis {analysis_id!r}: "
@@ -692,6 +694,7 @@ def _place_analysis(
         gate.unplaced(admission.Reason.LIFT_UNMAPPED, one.unmapped)
         gate.unplaced(admission.Reason.LIFT_AMBIGUOUS, one.ambiguous)
         gate.unplaced(admission.Reason.LIFT_OFF_PRIMARY, one.off_primary)
+        gate.unplaced(admission.Reason.LIFT_COLLISION, one.collided)
         if lifted:
             harvest.add_lifted(one.batch, one.source_alid)
         else:

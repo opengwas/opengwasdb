@@ -18,20 +18,31 @@ from pathlib import Path
 
 from opengwasdb.readers.registry import SourceSpec, open_source
 from opengwasdb.store_reader.identity import (
-    VariantNormalisationError,
     is_primary_contig,
-    normalise_chromosome,
 )
 from opengwasdb.variants.axis import sorted_alids
 from opengwasdb.variants.reference import (
     VariantReference,
     warn_reference_left_rows_blank,
 )
-from opengwasdb.variants.routing.keys import SourceKey, note_origin, routing_key, source_alid
-from opengwasdb.variants.routing.lift import place_union
+from opengwasdb.variants.routing.keys import (
+    SourceKey,
+    contig_label,
+    note_origin,
+    routing_key,
+    source_alid,
+)
+from opengwasdb.variants.routing.lift import (
+    LiftCollisions,
+    LiftDrops,
+    UnionPlacement,
+    collided_sites,
+    place_union,
+)
 from opengwasdb.variants.routing.names import (
     HARVEST_LABEL,
     RoutedNames,
+    SiteNames,
     harvested_names,
     union_names,
 )
@@ -87,6 +98,10 @@ class VariantRouting:
     `source_alids` and `table` is held only until `table` consumes it, so a
     genome-scale map is not resident through Pass 2: read `alids` and
     `source_alids` first, and call `table` once, before forking.
+
+    ``lift_drops`` is each source site dropped because another source locus lifted
+    onto its ALID (#325), by both identities, and the routing keys by which Pass 2
+    counts their rows as `lift_collision`.
     """
 
     def __init__(
@@ -98,6 +113,7 @@ class VariantRouting:
         names: RoutedNames,
         stats: Pass1Stats,
         off_primary: frozenset[str] = frozenset(),
+        lift_drops: LiftDrops | None = None,
     ) -> None:
         self._site_alid: Mapping[SourceKey, str] | None = site_alid
         self._reoriented = reoriented
@@ -105,6 +121,7 @@ class VariantRouting:
         self.names = names
         self.stats = stats
         self.off_primary = off_primary
+        self.lift_drops = lift_drops if lift_drops is not None else LiftDrops()
 
     def _sites(self) -> Mapping[SourceKey, str]:
         if self._site_alid is None:
@@ -179,36 +196,60 @@ def route_variants(
         return _route_by_reference(
             union_pass, authority, on_rsid_conflict, label or HARVEST_LABEL
         )
+    return _route_by_union(union_pass, authority, on_rsid_conflict, label or UNION_LABEL)
+
+
+def _route_by_union(
+    union_pass: _UnionPass,
+    authority: LiftedUnion,
+    policy: RsidConflictPolicy,
+    label: str,
+) -> VariantRouting:
+    """The sources' own union as the axis: every site lifted and placed, each named
+    by its first rsid. A collision's sources name nothing: they reach no ALID (#325)."""
+    placed, rsid_by_site = _place_union_pass(union_pass, authority)
+    collided = collided_sites(placed.collisions)
+    names = union_names(
+        rsid_by_site.without(placed.dropped, collided),
+        placed.lookup,
+        policy=policy,
+        label=label,
+    )
+    return VariantRouting(
+        placed.lookup, placed.reoriented, axis=None, names=names, stats=union_pass.stats,
+        off_primary=frozenset(placed.off_primary),
+        lift_drops=LiftDrops.of(placed.collisions, rsid_by_site.lifted),
+    )
+
+
+def _place_union_pass(
+    union_pass: _UnionPass, authority: LiftedUnion | FromReference
+) -> tuple[UnionPlacement, SiteNames]:
+    """Pass 1's union placed on GRCh38: the placement, and each site's first-named rsid."""
     tuples_by_assembly, rsid_by_site = union_pass.sites()
     placed = place_union(
         tuples_by_assembly,
         chain_file=authority.chain_file,
         failure_threshold=authority.failure_threshold,
     )
-    names = union_names(
-        _undropped(rsid_by_site, placed.dropped),
-        placed.lookup,
-        policy=on_rsid_conflict,
-        label=label or UNION_LABEL,
-    )
-    return VariantRouting(
-        placed.lookup, placed.reoriented, axis=None, names=names, stats=union_pass.stats,
-        off_primary=frozenset(placed.off_primary),
-    )
+    return placed, rsid_by_site
 
 
-def _undropped(
-    rsid_by_site: dict[SourceKey, str], dropped: Collection[str]
-) -> dict[SourceKey, str]:
-    """The named sites but those whose key both assemblies declare.
+def _unrouted_collisions(
+    collisions: LiftCollisions, reference: VariantReference
+) -> LiftCollisions:
+    """``collisions`` less the sources ``reference`` routes itself, which Pass 2 places.
 
-    Such a key is two loci and is placed nowhere (issue #255 rounds 4-5), so
-    its sites name nothing; comparing their names would count, or refuse, a
-    dispute no stored variant has.
-    """
-    if not dropped:
-        return rsid_by_site
-    return {site: rsid for site, rsid in rsid_by_site.items() if routing_key(site) not in dropped}
+    Compared by Routing Key, case-folded as Pass 2 matches a row, so a source the
+    reference stores under another spelling is not recorded as dropped."""
+    if not collisions:
+        return {}
+    routed = {routing_key(site) for site in reference.source_lookup}
+    kept = {
+        alid: tuple(s for s in sites if routing_key(s) not in routed)
+        for alid, sites in collisions.items()
+    }
+    return {alid: sites for alid, sites in kept.items() if sites}
 
 
 @dataclass(frozen=True)
@@ -221,10 +262,10 @@ class _UnionPass:
     stats: Pass1Stats
     readers: ReaderFactory
 
-    def sites(self) -> tuple[dict[str, set[SourceKey]], dict[SourceKey, str]]:
+    def sites(self) -> tuple[dict[str, set[SourceKey]], SiteNames]:
         """The site union by assembly, and each site's first-named rsid in
         ``(rank, site)`` order."""
-        result: tuple[dict[str, set[SourceKey]], dict[SourceKey, str]] = consume_shards(
+        result: tuple[dict[str, set[SourceKey]], SiteNames] = consume_shards(
             self.sources,
             materialize_site_union,
             n_workers=self.n_workers,
@@ -233,13 +274,6 @@ class _UnionPass:
             readers=self.readers,
         )
         return result
-
-
-def _contig(label: str) -> str:
-    try:
-        return normalise_chromosome(label)
-    except VariantNormalisationError:
-        return label
 
 
 def _without_off_primary_lifts(
@@ -292,7 +326,7 @@ def _lifted_off_primary_sites(reference: VariantReference) -> set[SourceKey]:
     return {
         site
         for site, alid in reference.source_lookup.items()
-        if alid in off_primary and _contig(site[0]) != alid.split(":", 1)[0]
+        if alid in off_primary and contig_label(site[0]) != alid.split(":", 1)[0]
     }
 
 
@@ -316,21 +350,23 @@ def _route_by_reference(
         names = RoutedNames(
             dict(reference.rsid_by_alid), RsidConflicts(policy, None), reference_named=True
         )
+        lift_drops = LiftDrops()
     else:
-        tuples_by_assembly, rsid_by_site = union_pass.sites()
-        placed = place_union(
-            tuples_by_assembly,
-            chain_file=authority.chain_file,
-            failure_threshold=authority.failure_threshold,
-        )
+        placed, rsid_by_site = _place_union_pass(union_pass, authority)
         # A tuple declared under both assemblies is two loci; naming the lifted
         # one from the other's row would attach an rsid to a variant a different
         # association owns.
-        candidates = _undropped(rsid_by_site, placed.dropped)
-        del rsid_by_site
+        candidates = rsid_by_site.without(placed.dropped)
+        # What the harvest's own lift collided on, less the sources the reference routes
+        # itself: those rows are placed, so nothing is dropped of them.
+        lift_drops = LiftDrops.of(
+            _unrouted_collisions(placed.collisions, reference),
+            rsid_by_site.lifted,
+        )
         names = harvested_names(
             candidates, reference.source_lookup, placed.lookup, policy=policy, label=label
         )
+        del rsid_by_site
     return VariantRouting(
         reference.source_lookup,
         reference.reoriented,
@@ -338,4 +374,6 @@ def _route_by_reference(
         names=names,
         stats=union_pass.stats,
         off_primary=off_primary,
+        lift_drops=lift_drops,
     )
+
