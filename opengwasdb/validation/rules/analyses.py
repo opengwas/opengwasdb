@@ -651,7 +651,7 @@ def effect_consistency_unchecked(target: Target) -> Iterator[str]:
             f"{len(unchecked)} Analysis/Analyses (first {named}) carry no effect_consistency "
             "outcome: the release was built before builds checked each stored z against its "
             "source's own p-value (ADR 0069, #510), so nothing in it says their effects are "
-            "on the scale they claim"
+            "on the scale they claim. associations.z_plausible audits what the Store holds"
         )
 
 

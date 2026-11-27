@@ -274,7 +274,7 @@ manifest and Column Map in `opengwasdb-stores`; the resolver names no Analysis.
 - **A CLI flag for the threshold.** The resolver CLI passes no tolerances
   through; adding the first one for a refusal would invite loosening it per run.
 
-## Addendum, 27 Nov 2026: every build runs the check (#510)
+## Addendum, 27 Nov 2026: every build runs the check, and a stored-z audit (#510)
 
 **The gap.** OGS-00032 and OGS-00033 were published with eleven Analyses whose z was
 wrong by a scale: ten of PMID 40222985 (Omae) whose harmonised `beta` holds the odds
@@ -289,7 +289,7 @@ built later by 0.20.0 and 0.26.0 from that frozen bundle, and no builder measure
 of the kind. Of the published Stores, only OGS-00011 was resolved by an engine with the
 check. OGS-00005 still holds `GCST002047`, the example this ADR names.
 
-**Decision: the build runs the check.** Each builder hands every Analysis to
+**Decision 1: the build runs the check.** Each builder hands every Analysis to
 `verify_effect_consistency` beside its EAF orientation check, and the shape is that
 check's (ADR 0037 §6, `build/eaf_orientation.py`). `check_effect_consistency` measures,
 `enforce_effect_consistency` raises one `EffectConsistencyError` naming every Analysis
@@ -334,19 +334,47 @@ the most 5e-8 hits in the published Stores. The 38 sources took 27.4 s
 (`scratch/510/build_check_real.jsonl`). Three more OGS-00011 sources, published only
 below p = 0.007 or p = 0.00067, pass in a second run with median |Δ| ≤ 0.0045.
 
-**Not decided here: an audit of Stores already built.** A published Store keeps no source
-p-value, so this check cannot be repeated on one. A stored-z audit (the share of an
-Analysis's associations above |z| 3, or at 5e-8) was measured on every published Store
-(`scratch/510/signals_table.md`, `survey.jsonl`). The |z| > 3 share flags genome-wide
-sources published only below a p threshold, whose effects are sound. Choosing that rule's
-bounds is left to a later ruling (#510).
+**Decision 2: a stored-z audit of Stores already built.** A published Store keeps no
+source p-value, so this check cannot be repeated on one. It keeps every z, and in a
+genome-wide scan few variants are at 5e-8. `associations.z_plausible` is a fold over the
+association scan that counts, per Analysis, the observed associations and those at
+5e-8, summed over a Hybrid's Dense Component and Overflow. It flags an Analysis with
+more than 30% at 5e-8 among at least 1,000 observed. It judges only genome-wide releases, those whose manifest declares
+`association_coverage` `gwas`, and it is an error from `format_version` 0.2.2 and a
+warning before that. Ruling of 27 Nov 2026, option A of the measurement:
+
+- *The gap.* The twelve mis-scaled Analyses have 81% or more of their sources' first
+  500,000 rows at 5e-8. Sound ones have at most 8.2% in the 206-source sample
+  (`scratch/510/signals_table.md`), and at most 9.7% in every published Store
+  (GCST90245992, height, OGS-00011; `scratch/510/survey.jsonl`), with each Hybrid
+  Analysis's counts summed over its components (`option_a_summed_verdicts.txt`). Over
+  every published Store the rule flags GCST002047 in OGS-00005 alone. In the replaced
+  OGS-00032 and OGS-00033 releases it flags exactly the eleven.
+- *A share above |z| 3 was dropped, not kept as a warning.* It flags sound genome-wide
+  sources published only below a p threshold: GCST90444395 (p ≤ 0.007, 55% above
+  |z| 3, 0.7% at 5e-8) and GCST90271757 (p ≤ 0.00067, every row above |z| 3, 2.2% at
+  5e-8). Both pass the build's check with median |Δ| ≤ 0.0045.
+- *Not cis.* With the coverage gate removed, a strong eGene's window is mostly at 5e-8:
+  the bound would flag 560 of OGS-00027's genes and 2 of OGS-00001's.
+- *Per Analysis, not per component.* A Hybrid's Overflow holds its off-panel, mostly
+  rare variants. Their larger SEs keep an odds ratio's z lower there, so the ten Omae
+  Analyses' Overflows sit at 14% to 25% at 5e-8, under the bound, while their Dense
+  Components sit at 86% to 91%. Judged per component, the 1,000-observation floor left
+  a part too small to judge alone, so an Analysis with 999 Dense associations all at
+  5e-8 beside a 1,500-row Overflow at 20% passed: the Dense part went unjudged and the
+  Overflow sat under the bound. Summed, the same Analysis is at 52% and fails. The rule
+  therefore sums each Analysis's counts over both components before it judges. The first
+  component's pass leaves its counts on the release, and the second sums and judges.
+  This closes the gap. (A share under 0.3 in both components is under 0.3 summed, since
+  the sum is a weighted mean; the floor was the hole.)
 
 **Consequences.**
 
 - A build refuses sources it used to build. The error says `effect_consistency=refused`
   and names the rule, so the registry can exclude by reason.
-- Every release built before this change warns `effect_consistency.unchecked`, and
-  nothing in a published Store repeats the check (above).
+- Every release built before this change warns `effect_consistency.unchecked`.
+  `validate` fails OGS-00005 on `associations.z_plausible` until it is rebuilt without
+  GCST002047, which the owner rules is excluded by reason through the registry.
 - Test fixtures that wrote a p-value unrelated to their beta/se were refused once a build
   checked. The batch-parity generators now write the p their rows imply.
 - The build manifest's optional `p_value_test` and the five `analyses.tsv` columns are

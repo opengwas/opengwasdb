@@ -20,3 +20,12 @@
   fails a recorded `refused` and evidence that contradicts itself.
   `effect_consistency.unchecked` warns on a blank outcome, which every release
   built before this change has. `format_version` does not move.
+- **New validation rule `associations.z_plausible` audits a genome-wide Store's
+  stored z.** It flags an Analysis with more than 30% of its observed
+  associations at 5e-8, summed over a Hybrid's two components, on releases
+  declaring `association_coverage` `gwas`.
+  It is an error from `format_version` 0.2.2 and a warning before that. The
+  twelve mis-scaled Analyses are at 81% or more, sound ones at 9.7% or less.
+  Across every published Store it flags only GCST002047 in OGS-00005, ADR
+  0069's own example, so `validate` fails that release until it is rebuilt
+  without the Analysis.
