@@ -70,7 +70,7 @@ def _write_ld_block(block_dir, block_name, snps, seed=0):
     A = rng.standard_normal((n, n))
     ld = A @ A.T + np.eye(n) * n * 0.1
     buf = io.BytesIO()
-    with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
+    with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as gz:
         for row in ld:
             gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
     (block_dir / f"{block_name}.unphased.vcor1.gz").write_bytes(buf.getvalue())

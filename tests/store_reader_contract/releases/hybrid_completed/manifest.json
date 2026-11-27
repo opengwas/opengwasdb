@@ -24,7 +24,11 @@
     "completion": {
       "ancestry": "EUR",
       "component_completed": "dense",
-      "ld_panel_id": "eur-hg38-gpm",
+      "ld_panel_ancestry_dir": "/store-reader-contract/build/digest/hybrid_completed/ld_panel/EUR",
+      "ld_panel_digest": "7fb693585f8b1d9f37ad2f8da479f65f1b473ff35d62c3b872a42e5bb04b412e",
+      "ld_panel_id": "sha256:7fb693585f8b1d9f",
+      "ld_panel_id_source": "digest",
+      "ld_panel_path": "/store-reader-contract/build/digest/hybrid_completed/ld_panel",
       "method": "elastic_net_eigenvectors_v2_regioncap",
       "n_imputed_dense": 4,
       "overflow_completion_state": "observed_only",
