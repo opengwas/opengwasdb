@@ -29,7 +29,7 @@ import io
 import json
 import os
 import shutil
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,16 +48,12 @@ __all__ = [
 
 #: The rule set's version, recorded in every summary; each change to what a rule
 #: admits moves it.
-ADMISSION_RULES = "admission/15"
+ADMISSION_RULES = "admission/14"
 
 SUMMARY = "admission.json"
 #: The Analyses whose Trait position a lifting build could not lift (#433); written
 #: by the build beside the summary, and cleared with the rest of a record.
 UNLIFTED_TRAIT_POSITIONS = "trait_positions_unlifted.tsv"
-#: The source sites a lift collision dropped (#325), one row each with the ALID the
-#: lift sent it to: what the per-Analysis `lift_collision` counts and logs cannot say.
-#: Written by the build beside the summary, and cleared with the rest of a record.
-LIFT_COLLISIONS = "lift_collisions.tsv"
 _PARTS = "parts"
 _DROPPED = "dropped"
 
@@ -136,28 +132,6 @@ class AdmissionRecord:
         self._write_log(index, gate.dropped, name)
         self._write_part(index, gate.counts, name)
 
-    def write_lift_collisions(
-        self, dropped: Iterable[tuple[str, str, str]], *, keep_existing: bool = False
-    ) -> None:
-        """Name every source site a lift collision dropped, as ``(target ALID,
-        source key, rsid)`` rows (#325), or write nothing when there are none.
-
-        The sources are named once for the build, not once per Analysis: an
-        Analysis's own log says which of its rows were dropped, and this file
-        says whose identities collided, so a reader can find the other source."""
-        rows = list(dropped)
-        path = self.directory / LIFT_COLLISIONS
-        if keep_existing and rows and path.exists():
-            held = path.read_text(encoding="utf-8").splitlines()[1:]
-            rows = sorted({*rows, *(_row_of(line) for line in held)})
-        if not rows:
-            return
-        self.directory.mkdir(parents=True, exist_ok=True)
-        text = "target_alid\tsource_key\trsid\n" + "".join(
-            "\t".join(row) + "\n" for row in rows
-        )
-        _write_bytes(path, text.encode("utf-8"))
-
     def finish(self) -> AdmissionSummary:
         """Read every part, write the summary, and return the counts.
 
@@ -193,7 +167,6 @@ class AdmissionRecord:
     def _clear(self) -> None:
         (self.directory / SUMMARY).unlink(missing_ok=True)
         (self.directory / UNLIFTED_TRAIT_POSITIONS).unlink(missing_ok=True)
-        (self.directory / LIFT_COLLISIONS).unlink(missing_ok=True)
         for name in (_PARTS, _DROPPED):
             shutil.rmtree(self.directory / name, ignore_errors=True)
 
@@ -242,12 +215,6 @@ class AdmissionRecord:
                 f"{self.analyses[index]!r}: the record was written for another manifest"
             )
         return AdmissionCounts.from_dict(data)
-
-
-def _row_of(line: str) -> tuple[str, str, str]:
-    """One data line of `LIFT_COLLISIONS`."""
-    alid, source_key, rsid = line.split("\t")
-    return alid, source_key, rsid
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:

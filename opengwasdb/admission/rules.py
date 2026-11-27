@@ -148,10 +148,6 @@ class Reason(StrEnum):
     #: places on an alt, random or unplaced contig: the Store holds the primary
     #: assembly's contigs only, so no row of it is placed (#376).
     LIFT_OFF_PRIMARY = LiftedOffPrimary.reason
-    #: A row of a source lifted onto the Store's assembly whose site reaches an ALID
-    #: that another source locus reaches too: no row of any of them is placed, since
-    #: which one owns the ALID is not knowable and none may take its statistics (#325).
-    LIFT_COLLISION = "lift_collision"
 
 
 #: The reasons whose rows are logged by source key, not only counted. A declared
@@ -174,7 +170,6 @@ LOGGED: frozenset[Reason] = frozenset(
         Reason.LIFT_UNMAPPED,
         Reason.LIFT_AMBIGUOUS,
         Reason.LIFT_OFF_PRIMARY,
-        Reason.LIFT_COLLISION,
     }
 )
 

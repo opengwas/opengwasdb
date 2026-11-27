@@ -382,19 +382,11 @@ class Case:
     #: the expectation, so `build --cases base` leaves the case out, and its tree
     #: is built with `--cases since` at that commit or later.
     since: str = ""
-    #: The ticket whose change this case's expected outcome no longer meets: a
-    #: checkout at or after it drops what the case expects. `build --cases base`
-    #: still builds it (with the inputs' base checkout), and the default `all` leaves
-    #: it out, its successor (`since` the same ticket) taking its place.
-    until: str = ""
 
 
 LIFT = {"chain_file": "fixture.chain", "liftover_failure_threshold": 0.5}
 SMALL_WINDOWS = {"window_size_mb": 0.001, "reduction_batch_size": 2, "map_spill_records": 1}
-STRAND_ALIDS = ("1:101000:A:G", "2:999001:C:T", "2:998001:A:T")
-#: hg19 4:501 and 4:1001 both land here: two loci on one ALID, which a checkout since #325
-#: drops (both sources), and one before it stores with one source's statistics.
-LIFT_COLLISION = ("4:5501:A:G",)
+STRAND_ALIDS = ("1:101000:A:G", "2:999001:C:T", "2:998001:A:T", "4:5501:A:G")
 #: The raw tuple B (hg19) and C (hg38) both spell: two loci, so dropped from both.
 CROSS_ASSEMBLY = ("3:2000:A:G",)
 #: E's lower-case spellings of D's variants. Alleles are upper-cased before
@@ -402,12 +394,8 @@ CROSS_ASSEMBLY = ("3:2000:A:G",)
 LOWER_CASE = ("1:101000:a:g", "X:1000:a:g")
 
 CASES = (
-    *(Case(f"dense-lift-n{n}", "dense", "lift", {**LIFT, "n_workers": n},
-           (*STRAND_ALIDS, *LIFT_COLLISION), absent_alids=CROSS_ASSEMBLY, until="#325")
-      for n in (1, 2)),
-    *(Case(f"dense-lift-collision-n{n}", "dense", "lift", {**LIFT, "n_workers": n},
-           STRAND_ALIDS, absent_alids=CROSS_ASSEMBLY + LIFT_COLLISION, since="#325")
-      for n in (1, 2)),
+    *(Case(f"dense-lift-n{n}", "dense", "lift", {**LIFT, "n_workers": n}, STRAND_ALIDS,
+           absent_alids=CROSS_ASSEMBLY) for n in (1, 2)),
     *(Case(f"dense-hg38-n{n}", "dense", "hg38", {"n_workers": n}, ("X:1000:A:G",),
            absent_alids=LOWER_CASE, since="#360") for n in (1, 2)),
     # E's lower-case rows reach the list's upper-case ALIDs, rather than being
@@ -428,10 +416,7 @@ CASES = (
            {**LIFT, "variant_reference": "fwd.variant-ref.tsv.gz", "n_workers": n},
            ("4:5501:A:G",)) for n in (1, 2)),
     Case("hybrid-panel-lift", "hybrid", "lift", {**LIFT, "reference_panel": "lift.panel.txt"},
-         (*STRAND_ALIDS, *LIFT_COLLISION), absent_alids=CROSS_ASSEMBLY, until="#325"),
-    Case("hybrid-panel-lift-collision", "hybrid", "lift",
-         {**LIFT, "reference_panel": "lift.panel.txt"},
-         STRAND_ALIDS, absent_alids=CROSS_ASSEMBLY + LIFT_COLLISION, since="#325"),
+         STRAND_ALIDS, absent_alids=CROSS_ASSEMBLY),
     Case("hybrid-panel-hg38-maf-n2", "hybrid", "hg38_maf",
          {"reference_panel": "hg38.panel.txt", "n_workers": 2}, ("5:200:A:T",)),
     # E's lower-case spellings are D's variants, so Pass 1 names one ALID for
@@ -469,11 +454,10 @@ CASES = (
            absent_alids=("2:995001:A:G",), since="#354") for n in (1, 2)),
 )
 
-#: Which cases `build --cases` builds: every one the checkout meets (not those a later
-#: change retired, `until`), only those whose expectation holds at the inputs' base, or
-#: only those recorded at a later commit.
+#: Which cases `build --cases` builds: every one, only those whose expectation
+#: holds at the inputs' base, or only those recorded at a later commit.
 CASE_SETS: dict[str, Callable[[Case], bool]] = {
-    "all": lambda case: not case.until,
+    "all": lambda case: True,
     "base": lambda case: not case.since,
     "since": lambda case: bool(case.since),
 }

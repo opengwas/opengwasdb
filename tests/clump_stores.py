@@ -29,6 +29,8 @@ from pathlib import Path
 import numpy as np
 from dense_sources import build_dense_from_records
 
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
@@ -216,8 +218,8 @@ def build_dense_completed(root: Path) -> Path:
     source = build_dense(root / "obs.opengwasdb")
     completed = root / "completed.opengwasdb"
     complete_dense_store(
-        source, completed, completion_panel(root / "ld_panel"), ancestry="EUR", min_cor=0.0,
-        release_id="clumps-comp",
+        source, completed, PanelSource(completion_panel(root / "ld_panel"), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="clumps-comp"),
     )
     return completed
 

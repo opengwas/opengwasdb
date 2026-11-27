@@ -38,8 +38,11 @@ from opengwasdb.completion.checkpoint import (
     BlockCompletionResult,
     checkpoint_blocks_dir,
     checkpoint_dir_for,
+    checkpointed_panel,
     require_fresh_destination,
+    require_same_panel,
     sanitize_block_id,
+    start_checkpoint,
     write_block_checkpoint,
 )
 from opengwasdb.completion.fill_shards import (
@@ -56,7 +59,9 @@ from opengwasdb.completion.fill_shards import (
 )
 from opengwasdb.completion.ld_panel import (
     BlockPlacement,
+    PanelIdentity,
     PanelPlacement,
+    PanelSource,
     ceded_at_end,
     check_panel_has_chromosomes,
     list_all_blocks,
@@ -67,6 +72,7 @@ from opengwasdb.completion.manifest import (
     build_completion_provenance,
     completed_release_manifest,
 )
+from opengwasdb.completion.options import DEFAULT_OPTIONS, CompletionOptions
 from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
@@ -134,7 +140,6 @@ log = logging.getLogger(__name__)
 
 
 _COMPRESSOR = compressor()
-_LD_PANEL_ID = "eur-hg38-gpm"
 
 #: What the Association Reader names the source in a refusal.
 _SOURCE = "complete-dense, the source's Dense grid"
@@ -284,15 +289,9 @@ def _run_block(task: _BlockTask) -> BlockCompletionResult | None:
 def complete_dense_store(
     source_path: str | Path,
     dest_path: str | Path,
-    ld_dir: str | Path,
+    panel: PanelSource,
+    options: CompletionOptions = DEFAULT_OPTIONS,
     *,
-    ancestry: str = "EUR",
-    min_cor: float = 0.7,
-    thresh: float = 0.9,
-    release_id: str | None = None,
-    ld_panel_id: str = _LD_PANEL_ID,
-    n_workers: int = 1,
-    overwrite: bool = False,
     impute_analysis_ids: set[str] | None = None,
 ) -> CompletionResult:
     """Produce a Dense Reference-Completed Store Release from a `gwas`-coverage
@@ -300,7 +299,9 @@ def complete_dense_store(
 
     source_path: existing Dense Observed-Only, `gwas`-coverage store.
     dest_path:   new store directory to create.
-    ld_dir:      root of LD panel; blocks at ld_dir/{ancestry}/{chr}/{block}.*
+    panel:       the LD panel to read (`PanelSource`): every block of its ancestry's
+                 chromosomes completes the whole grid.
+    options:     min_cor and thresh shape the imputation; the rest is bookkeeping.
     impute_analysis_ids: if given, only these analyses are imputed (the
         ancestry-match filter, ADR 0028); others are carried through
         observed-only. ``None`` auto-derives the filter from the source's
@@ -310,11 +311,12 @@ def complete_dense_store(
     """
     dst = Path(dest_path)
     checkpoint_dir = checkpoint_dir_for(dst)
-    require_fresh_destination(dst, checkpoint_dir, overwrite, "resume_dense_completion")
+    require_fresh_destination(dst, checkpoint_dir, options.overwrite, "resume_dense_completion")
     source = open_store(source_path)
     check_writable_format_version(
         source.manifest.format_version, source=f"source release {Path(source_path)}"
     )
+    ld_dir, ancestry = panel.path, panel.ancestry
     check_panel_has_chromosomes(ld_dir, ancestry)
 
     if impute_analysis_ids is None:
@@ -328,28 +330,21 @@ def complete_dense_store(
         "dest_path": str(dst.resolve()),
         "ld_dir": str(Path(ld_dir).resolve()),
         "ancestry": ancestry,
-        "min_cor": min_cor,
-        "thresh": thresh,
-        "release_id": release_id,
-        "ld_panel_id": ld_panel_id,
+        "min_cor": options.min_cor,
+        "thresh": options.thresh,
+        "release_id": options.release_id,
         "impute_analysis_ids": sorted(impute_analysis_ids)
         if impute_analysis_ids is not None
         else None,
     }
-    (checkpoint_dir / "build_params.json").write_text(
-        json.dumps(build_params, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    start_checkpoint(checkpoint_dir, build_params, panel)
 
     result = _run_completion(
         Path(source_path),
         dst,
         Path(ld_dir),
         ancestry=ancestry,
-        min_cor=min_cor,
-        thresh=thresh,
-        release_id=release_id,
-        ld_panel_id=ld_panel_id,
-        n_workers=n_workers,
+        options=options,
         checkpoint_dir=checkpoint_dir,
         impute_analysis_ids=impute_analysis_ids,
     )
@@ -371,6 +366,7 @@ def resume_dense_completion(
     """
     checkpoint_dir = Path(checkpoint_dir)
     params = json.loads((checkpoint_dir / "build_params.json").read_text(encoding="utf-8"))
+    require_same_panel(checkpoint_dir, params)
 
     impute_ids = params.get("impute_analysis_ids")
     result = _run_completion(
@@ -378,11 +374,10 @@ def resume_dense_completion(
         Path(params["dest_path"]),
         Path(params["ld_dir"]),
         ancestry=params["ancestry"],
-        min_cor=params["min_cor"],
-        thresh=params["thresh"],
-        release_id=params["release_id"],
-        ld_panel_id=params["ld_panel_id"],
-        n_workers=n_workers,
+        options=CompletionOptions(
+            min_cor=params["min_cor"], thresh=params["thresh"],
+            release_id=params["release_id"], n_workers=n_workers,
+        ),
         checkpoint_dir=checkpoint_dir,
         impute_analysis_ids=set(impute_ids) if impute_ids is not None else None,
     )
@@ -876,7 +871,7 @@ def _write_completed_manifest(
     arrays: _CompletedArrays,
     *,
     release_id: str | None,
-    ld_panel_id: str,
+    panel: PanelIdentity,
     ancestry: str,
     min_cor: float,
     thresh: float,
@@ -894,7 +889,7 @@ def _write_completed_manifest(
         release_id=release_id,
         source_format_version=source_format_version,
         completion_provenance=build_completion_provenance(
-            ld_panel_id=ld_panel_id,
+            ld_panel=panel,
             ancestry=ancestry,
             min_cor=min_cor,
             thresh=thresh,
@@ -1022,11 +1017,7 @@ def _run_completion(
     ld_dir: Path,
     *,
     ancestry: str,
-    min_cor: float,
-    thresh: float,
-    release_id: str | None,
-    ld_panel_id: str,
-    n_workers: int,
+    options: CompletionOptions,
     checkpoint_dir: Path,
     impute_analysis_ids: set[str] | None = None,
 ) -> CompletionResult:
@@ -1034,6 +1025,7 @@ def _run_completion(
     orchestrator over the five phases above, all inside one staged release so
     a failure leaves no half-written store behind (resume reads the per-block
     checkpoints Phase 2 left)."""
+    min_cor, thresh, n_workers = options.min_cor, options.thresh, options.n_workers
     src = Path(source_path)
     dst = Path(dest_path)
     timer = PhaseTimer()
@@ -1061,8 +1053,8 @@ def _run_completion(
             source_format_version,
             axis,
             arrays,
-            release_id=release_id,
-            ld_panel_id=ld_panel_id,
+            release_id=options.release_id,
+            panel=checkpointed_panel(checkpoint_dir),
             ancestry=ancestry,
             min_cor=min_cor,
             thresh=thresh,

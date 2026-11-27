@@ -92,7 +92,6 @@ from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
 from opengwasdb.layouts.hybrid.checkpoint import (
     AXIS,
     AXIS_CANONICAL_RAW,
-    AXIS_LIFT_COLLISIONS,
     AXIS_OFF_PANEL,
     AXIS_OFF_PRIMARY,
     AXIS_PANEL,
@@ -204,8 +203,6 @@ from opengwasdb.variants.routing import (
     collapse_duplicates,
     route_variants,
 )
-from opengwasdb.variants.routing.keys import raw_site_key
-from opengwasdb.variants.routing.lift import DroppedSource, LiftDrops
 from opengwasdb.variants.rsid import RsidConflictPolicy, RsidConflicts
 
 if TYPE_CHECKING:
@@ -297,7 +294,6 @@ def _resolve_column_hybrid(
     axes: tuple[Sequence[str], ...],
     folds: bool,
     off_primary: frozenset[str] = frozenset(),
-    lift_collided: frozenset[str] = frozenset(),
 ) -> tuple[_Component, _Overflow, _OffReferenceSpill]:
     """Stream one study once, routing each association to the dense fill
     (on-panel), the ragged overflow (off-panel), or -- when the route table does
@@ -330,9 +326,7 @@ def _resolve_column_hybrid(
     if not folds:
         # A two-pass axis is the sources' whole union, so nothing folds an
         # unmatched row onto it later: it is dropped here, and logged.
-        gate.unplaced_unmatched(
-            unmatched, off_primary, lift_collided, lifted=row.source_assembly == "hg19"
-        )
+        gate.unplaced_off_axis(unmatched.keys, off_primary)
         unmatched = Unmatched.none()
     return (
         (dense.index, dense.z, dense.se, dense.eaf),
@@ -436,12 +430,11 @@ class _Pass2Context:
     axes: tuple[Sequence[str], ...]
     folds: bool
     off_primary: frozenset[str] = frozenset()
-    lift_collided: frozenset[str] = frozenset()
 
 
 def _route_column(
     context: _Pass2Context, task: tuple[int, ManifestRow]
-) -> tuple[int, int, int, frozenset[str]]:
+) -> tuple[int, int, int]:
     """Route and spill one Analysis (`_route_and_spill_column`), then hand what
     it freed back to the host: a Pass 2 worker lives for the whole pass, and
     would otherwise keep the high-water of every Analysis it routes (#451)."""
@@ -454,11 +447,10 @@ def _route_column(
 
 def _route_and_spill_column(
     context: _Pass2Context, task: tuple[int, ManifestRow]
-) -> tuple[int, int, int, frozenset[str]]:
+) -> tuple[int, int, int]:
     """Route one study and spill it; its Admission part is written beside the
     Store, and only its column returns, with how many associations it left out
-    of the Dense Component and of the Overflow (issue #338) and the keys of its
-    rows dropped as a lift collision (#325, a handful at most)."""
+    of the Dense Component and of the Overflow (issue #338)."""
     col_idx, row = task
     rules = AnalysisRules(
         row.trait_id,
@@ -467,15 +459,13 @@ def _route_and_spill_column(
     )
     with context.record.gate(rules) as gate:
         dense, overflow, off_reference = _resolve_column_hybrid(
-            context.table, row, gate, context.axes, context.folds, context.off_primary,
-            context.lift_collided,
+            context.table, row, gate, context.axes, context.folds, context.off_primary
         )
         parts, left_out = _stored_parts(
             row.trait_id, PhenotypeSd.dividing_by(row.se_divisor), dense, overflow, off_reference
         )
         _spill_hybrid_column(context.spill_dir, col_idx, *parts)
-        collided = gate.lift_collided_rows
-    return col_idx, left_out[0], left_out[1], collided
+    return col_idx, left_out[0], left_out[1]
 
 
 def _stored_parts(
@@ -598,9 +588,6 @@ class _SourceAxis:
     table: RouteTable
     #: The routing keys of the sites a lift placed off the primary assembly (#376).
     off_primary: frozenset[str] = frozenset()
-    #: The sites a lift collision dropped (#325): their keys count their rows, and
-    #: the Admission record names each.
-    lift_drops: LiftDrops = LiftDrops()
 
 
 @dataclass(frozen=True)
@@ -633,7 +620,6 @@ class _PreparedBuild:
     n_analyses: int
     #: The routing keys of the sites a lift placed off the primary assembly (#376).
     off_primary: frozenset[str] = frozenset()
-    lift_drops: LiftDrops = LiftDrops()
 
 
 @dataclass(frozen=True)
@@ -952,7 +938,6 @@ def _lift_and_partition(
         names=routing.names,
         table=table,
         off_primary=routing.off_primary,
-        lift_drops=routing.lift_drops,
     )
 
 
@@ -1299,28 +1284,6 @@ def _merge_unknown_provenance(
 
 
 @dataclass(frozen=True)
-class _FoldUnplaced:
-    """Why a column's rows no key resolved left the axis (`Gate.unplaced_off_axis`): the
-    raw keys a lift placed off the primary assembly (#376), those a lift collision
-    dropped (#325), and the columns whose Analysis was lifted from hg19. A row of a
-    collided key is `lift_collision` in those, and `lift_ambiguous` in a GRCh38 column."""
-
-    off_primary: frozenset[str] = frozenset()
-    lift_collided: frozenset[str] = frozenset()
-    lifted_columns: frozenset[int] = frozenset()
-
-    def drop(self, gate: Gate, col: int, keys: Sequence[str]) -> None:
-        """Drop column ``col``'s rows named by ``keys``, each counted by its reason."""
-        gate.unplaced_off_axis(
-            keys, self.off_primary, self.lift_collided, lifted=col in self.lifted_columns
-        )
-
-
-#: A fold no lift touched: each row no key resolved is `off_axis`.
-_ALL_OFF_AXIS = _FoldUnplaced()
-
-
-@dataclass(frozen=True)
 class _FoldContext:
     """What every fold worker reads. ``record`` and ``shared_alids`` are where
     a column's fold-stage drops are written and the axis that names them."""
@@ -1334,7 +1297,7 @@ class _FoldContext:
     record: AdmissionRecord
     shared_alids: Sequence[str]
     marker_dir: Path | None = None
-    unplaced: _FoldUnplaced = _ALL_OFF_AXIS
+    off_primary: frozenset[str] = frozenset()
 
 
 _fold_context: _FoldContext | None = None
@@ -1373,9 +1336,6 @@ class _FoldInputs:
     #: The raw keys the lift placed off the primary assembly, which the fold counts
     #: as `lift_off_primary` and not `off_axis` (#376).
     off_primary: frozenset[str] = frozenset()
-    #: The off-reference sites a lift collision dropped, by raw key (#325): the
-    #: fold counts their rows as `lift_collision`, and the record names each.
-    lift_drops: LiftDrops = LiftDrops()
 
 
 def _folded_columns(state: CheckpointState | None) -> frozenset[int]:
@@ -1500,11 +1460,11 @@ def _record_fold(
 ) -> None:
     """Write what the fold dropped of one column's admitted rows as the
     Admission record's `fold` stage for that Analysis: its duplicates by ALID,
-    and the rows no key resolved, by raw key and why (`_FoldUnplaced`, D6)."""
+    and the rows no key resolved, by raw key, as `off_axis` (D6)."""
     alids = ctx.shared_alids
     with ctx.record.stage(ctx.record.analyses[col], "fold") as gate:
         gate.duplicates([alids[i] for i in folded.conflicting], folded.collapsed)
-        ctx.unplaced.drop(gate, col, unresolved)
+        gate.unplaced_off_axis(unresolved, ctx.off_primary)
 
 
 def _fold_column(col: int) -> int:
@@ -1597,7 +1557,7 @@ def _fold_unknown_spills(
     shared_alids: Sequence[str],
     marker_dir: Path | None = None,
     already_folded: frozenset[int] = frozenset(),
-    unplaced: _FoldUnplaced = _ALL_OFF_AXIS,
+    off_primary: frozenset[str] = frozenset(),
 ) -> None:
     """Fold every column's ``.unk.npz`` into its ``.ovf.npz`` with shared indices.
 
@@ -1616,8 +1576,7 @@ def _fold_unknown_spills(
     columns it has left, rather than re-remapping entries it already rewrote.
 
     Each column writes what it dropped to ``record``'s `fold` stage, naming a
-    row by its ALID on ``shared_alids``, the axis the fold folds onto, and the rows no
-    key resolved by why (``unplaced``).
+    row by its ALID on ``shared_alids``, the axis the fold folds onto.
     """
     table_keys, table_shared = table.keys, table.shared_index
     canonical_values, canonical_raw = canonical.values, canonical.raw
@@ -1636,7 +1595,7 @@ def _fold_unknown_spills(
         record=record,
         shared_alids=shared_alids,
         marker_dir=marker_dir,
-        unplaced=unplaced,
+        off_primary=off_primary,
     )
     pending = [col for col in range(n_analyses) if col not in already_folded]
     try:
@@ -1821,9 +1780,6 @@ def _fold_under(
     pre-fold one `_prepare_build` may have re-written.
     """
     record = _admission_record(prepared, options, resume=True)
-    # Found while resolving this run's off-reference keys; a recorded axis has none
-    # to add, and the file its first run wrote stays.
-    record.write_lift_collisions(fold.lift_drops.sources, keep_existing=True)
     _fold_unknown_spills(
         prepared.spill_dir,
         prepared.n_analyses,
@@ -1835,15 +1791,7 @@ def _fold_under(
         shared_alids=fold.shared_sorted,
         marker_dir=_fold_marker_dir(state),
         already_folded=_folded_columns(state),
-        unplaced=_FoldUnplaced(
-            fold.off_primary,
-            fold.lift_drops.keys,
-            frozenset(
-                col
-                for col, row in enumerate(prepared.manifest_rows)
-                if row.source_assembly == "hg19"
-            ),
-        ),
+        off_primary=fold.off_primary,
     )
     # The fold's drops are each Analysis's too, so the summary is written again.
     record.finish()
@@ -1867,13 +1815,6 @@ def _off_reference_fold_inputs(
     if off_reference is None:
         return None
     resolved = off_reference.resolved
-    # Named as the harvest's lift named each source; a reference that names its own
-    # rsids is not harvested, so the fold's spelling is all there is, with no rsid.
-    drops = (
-        prepared.lift_drops.found_by(resolved.lift_collisions)
-        if prepared.names.pending
-        else LiftDrops.of(resolved.lift_collisions, spell=raw_site_key)
-    )
     if not len(resolved.keys):
         return _FoldInputs(
             table=_EMPTY_KEY_TABLE,
@@ -1884,7 +1825,6 @@ def _off_reference_fold_inputs(
             dense_to_shared=prepared.dense_to_shared,
             hg38_to_source=prepared.hg38_to_source,
             off_primary=resolved.off_primary,
-            lift_drops=drops,
         )
     table, old_to_new, index, off_panel, shared_sorted = _build_shared_key_table(
         prepared, resolved
@@ -1903,7 +1843,6 @@ def _off_reference_fold_inputs(
         dense_to_shared=dense_to_shared,
         hg38_to_source=_merge_unknown_provenance(prepared.hg38_to_source, resolved),
         off_primary=resolved.off_primary,
-        lift_drops=drops,
     )
 
 
@@ -1939,17 +1878,6 @@ def _record_axis(
         shared_sorted=prepared.partition.shared_sorted,
         dense_to_shared=prepared.dense_to_shared,
         hg38_to_source=prepared.hg38_to_source,
-    )
-    # The dropped sources' identities first: the axis is resumable once axis.npz is
-    # there, and a fold resumed without them would count the drops and never name them.
-    write_lines(
-        state.path / AXIS_LIFT_COLLISIONS,
-        (
-            "\t".join((*source, key))
-            for source, key in zip(
-                inputs.lift_drops.sources, inputs.lift_drops.spelled, strict=True
-            )
-        ),
     )
     save_npz(
         state.path / AXIS,
@@ -1990,35 +1918,23 @@ def _recorded_axis(state: CheckpointState | None) -> _FoldInputs | None:
         dense_to_shared=arrays["dense_to_shared"].astype(np.int32),
         hg38_to_source=read_str_map(state.path / PROVENANCE_SOURCE),
         off_primary=_recorded_off_primary(state),
-        lift_drops=_recorded_lift_drops(state),
     )
 
 
 def _recorded_off_primary(state: CheckpointState) -> frozenset[str]:
-    """The raw keys the first run's lift placed off the primary assembly (#376)."""
-    return frozenset(_recorded_lines(state, AXIS_OFF_PRIMARY))
+    """The raw keys the first run's lift placed off the primary assembly (#376).
 
-
-def _recorded_lift_drops(state: CheckpointState) -> LiftDrops:
-    """The sources the first run's lift dropped as a collision, with their identities (#325)."""
-    rows = [line.split("\t") for line in _recorded_lines(state, AXIS_LIFT_COLLISIONS)]
-    return LiftDrops.read_back((DroppedSource(*row[:3]) for row in rows), (row[3] for row in rows))
-
-
-def _recorded_lines(state: CheckpointState, name: str) -> list[str]:
-    """The lines the first run's lift recorded in ``name``: the keys it placed off the
-    primary assembly (#376), or the sources it dropped as a collision (#325).
-
-    A recorded axis always has the file, empty when nothing was dropped; a missing
-    one is refused, since reading it as empty would publish the rows uncounted."""
-    path = state.path / name
+    A recorded axis always has the file, empty when no key was placed off it; a
+    missing one is refused, since reading it as empty would publish the alt-contig
+    ALIDs the lift put on the axis uncounted."""
+    path = state.path / AXIS_OFF_PRIMARY
     if not path.exists():
         raise ValueError(
             f"The checkpoint at {state.path} records an axis but not {path.name}, which "
             f"this build writes beside it: the record is torn or predates this build. "
             f"Start the build again with --checkpoint."
         )
-    return read_lines(path)
+    return frozenset(read_lines(path))
 
 
 def _update_partition(
@@ -2072,20 +1988,13 @@ def _route_studies(
         (prepared.partition.panel_sorted, prepared.partition.shared_sorted),
         folds=options.variant_reference is not None,
         off_primary=prepared.off_primary,
-        lift_collided=prepared.lift_drops.keys,
     )
     tasks = [(analysis_index[row.trait_id], row) for row in rows]
     left_out = _LeftOut.none(n_analyses)
     routed = fork_each(_route_column, context, tasks, options.n_workers)
-    seen: set[str] = set()
-    for i, (col, dense_left_out, overflow_left_out, collided) in enumerate(routed):
+    for i, (col, dense_left_out, overflow_left_out) in enumerate(routed):
         left_out.dense[col], left_out.overflow[col] = dense_left_out, overflow_left_out
-        seen |= collided
         log_progress("Pass 2", i + 1, n_analyses, pass2_start, f"last: {id_by_col[col]}", every=25)
-    if not context.folds:
-        # What Pass 2 really dropped; a single-pass build's drops are the fold's, and
-        # are written there from what the fold resolved.
-        record.write_lift_collisions(prepared.lift_drops.among(seen))
     return _RoutedSpills(
         id_by_col=id_by_col,
         pass2_start=pass2_start,
@@ -2559,7 +2468,6 @@ def _prepare_build(
         table=axis.table,
         n_analyses=len(manifest_rows),
         off_primary=axis.off_primary,
-        lift_drops=axis.lift_drops,
     )
 
 

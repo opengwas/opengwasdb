@@ -41,6 +41,9 @@ from typing import Any
 import numpy as np
 
 from opengwasdb import top_hits
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.manifest import PANEL_FIELDS, panel_fields
+from opengwasdb.completion.options import DEFAULT_OPTIONS, CompletionOptions
 from opengwasdb.completion.reference_eaf import completed_eaf_scope
 from opengwasdb.completion.schema import CompletionQualityRollup
 from opengwasdb.completion.se_out_of_range import PROVENANCE_KEY as SE_OUT_OF_RANGE_KEY
@@ -188,40 +191,28 @@ def _open_observed_hybrid_source(source_path: Path) -> StoreManifest:
 def complete_hybrid_store(
     source_path: str | Path,
     dest_path: str | Path,
-    ld_dir: str | Path,
-    *,
-    ancestry: str = "EUR",
-    min_cor: float = 0.7,
-    thresh: float = 0.9,
-    release_id: str | None = None,
-    n_workers: int = 1,
-    overwrite: bool = False,
+    panel: PanelSource,
+    options: CompletionOptions = DEFAULT_OPTIONS,
 ) -> HybridCompletionResult:
     """Produce a Reference-Completed Hybrid store from an Observed-Only
     Hybrid source (ADR 0026, issue #058)."""
     src = Path(source_path)
     dst = Path(dest_path)
-    ld = Path(ld_dir)
     src_manifest = _open_observed_hybrid_source(src)
-
     # The four phases below run inside the staging context, so a failure in
     # any of them leaves no partial release at `dst` (atomic staging).
-    with OpenGWASDBStore.staging(dst, overwrite=overwrite) as staged:
+    with OpenGWASDBStore.staging(dst, overwrite=options.overwrite) as staged:
         # Phase 1: complete the Dense Component via the dense pipeline.
         dense = _complete_dense_component(
             src,
             staged.path,
-            ld,
-            ancestry=ancestry,
-            min_cor=min_cor,
-            thresh=thresh,
-            release_id=release_id,
-            n_workers=n_workers,
+            panel,
+            options,
         )
         # Phase 2: read the source overflow once, fold panel crossovers into
         # the completed component, and rebuild the shared union axis.
         overflow = _read_source_overflow(src)
-        axis = _remap_shared_axis(dense, overflow, src, n_workers)
+        axis = _remap_shared_axis(dense, overflow, src, options.n_workers)
         # Phase 3: shared variant table/dense_to_shared map, then the
         # overflow CSR rebuilt on the remapped indices.
         analyses = _read_analyses(dense.dir)
@@ -230,7 +221,7 @@ def complete_hybrid_store(
         )
         # Phase 4: manifest, overflow top hits and the shared rollups.
         _finalize_completed_hybrid(
-            staged, src_manifest, release_id,
+            staged, src_manifest, options.release_id,
             _root_analyses(src, analyses, overflow_left_out), axis, overflow, n_overflow,
             overflow_left_out,
         )
@@ -252,13 +243,8 @@ def complete_hybrid_store(
 def _complete_dense_component(
     src: Path,
     staged_path: Path,
-    ld_dir: Path,
-    *,
-    ancestry: str,
-    min_cor: float,
-    thresh: float,
-    release_id: str | None,
-    n_workers: int,
+    panel: PanelSource,
+    options: CompletionOptions,
 ) -> _CompletedDense:
     """Run the dense reference-completion pipeline unchanged on the Dense
     Component, then read back the completed axis and plan it recorded.
@@ -272,13 +258,8 @@ def _complete_dense_component(
     dense_result = complete_dense_store(
         dense_component_path(src),
         dense_dir,
-        ld_dir,
-        ancestry=ancestry,
-        min_cor=min_cor,
-        thresh=thresh,
-        release_id=release_id,
-        n_workers=n_workers,
-        overwrite=True,
+        panel,
+        replace(options, overwrite=True),
     )
     dense = open_store(dense_dir)
     dense_axis = dense.variant_axis(aliases=False)
@@ -866,7 +847,7 @@ def _read_analyses(dense_dir: Path) -> list[Analysis]:
 #: cannot be written without. `ld_panel_id` and `ancestry` are the panel
 #: identity that `eaf_reference` made load-bearing (issue #116); `method` says
 #: how the cells were filled.
-_REQUIRED_DENSE_COMPLETION_KEYS = ("method", "ld_panel_id", "ancestry")
+_REQUIRED_DENSE_COMPLETION_KEYS = ("method", *PANEL_FIELDS, "ancestry")
 
 
 def _dense_completion_provenance(staged_path: Path) -> Mapping[str, Any]:
@@ -995,13 +976,14 @@ def _completed_hybrid_provenance(
             },
         ),
         "completion": {
+            **src_manifest.provenance.get("completion", {}),
             # The panel this release was completed against, at the top
             # level and not only inside the Dense Component: "one panel per
             # completed store" is load-bearing once `eaf_reference` holds
             # that panel's frequencies, so it is recorded where a reader of
             # the Hybrid store looks (issue #116).
             "method": dense_completion["method"],
-            "ld_panel_id": dense_completion["ld_panel_id"],
+            **panel_fields(dense_completion),
             "ancestry": dense_completion["ancestry"],
             "component_completed": "dense",
             "overflow_completion_state": "observed_only",

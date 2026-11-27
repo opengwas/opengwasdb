@@ -45,6 +45,8 @@ from test_ragged_completion import _make_besd_fixture
 from test_ragged_completion import _make_ld_panel as _make_ragged_ld_panel
 
 from benchmarks.benchmark_store_comparison import assert_identical, result_digests
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
@@ -89,13 +91,8 @@ def ragged_completed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     panel = _make_ragged_ld_panel(root, "1", 900_000, 1_300_000)
     completed = root / "ragged-rc-built.opengwasdb"
     complete_ragged_store(
-        observed,
-        completed,
-        panel,
-        ancestry="EUR",
-        cis_window_bp=500_000,
-        min_cor=0.0,
-        release_id="rc-v1",
+        observed, completed, PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="rc-v1"), cis_window_bp=500_000,
     )
     return relayout_as_0_1_0(completed, root / "ragged-rc.opengwasdb")
 
@@ -112,7 +109,8 @@ def dense_completed(tmp_path_factory: pytest.TempPathFactory) -> Path:
     panel = _make_dense_ld_panel(root)
     completed = root / "dense-rc-built.opengwasdb"
     complete_dense_store(
-        observed, completed, panel, ancestry="EUR", min_cor=0.0, release_id="rc-v1"
+        observed, completed, PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="rc-v1"),
     )
     return relayout_as_0_1_0(completed, root / "dense-rc.opengwasdb")
 

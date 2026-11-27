@@ -28,7 +28,6 @@ from opengwasdb.build.ordered_pool import fork_pool
 from opengwasdb.encoding.timing import format_duration
 from opengwasdb.readers.interface import SourceReader, SourceVariant
 from opengwasdb.readers.registry import SourceSpec, open_source
-from opengwasdb.variants.routing.names import SiteNames
 from opengwasdb.variants.windows import (
     DEFAULT_MAP_SPILL_RECORDS,
     DEFAULT_REDUCTION_BATCH_SIZE,
@@ -679,7 +678,7 @@ def _map_reduce_windows(run: _MapRun, workers: int) -> dict[tuple[str, WindowKey
 
 def materialize_site_union(
     window_shards: WindowShards,
-) -> tuple[dict[str, set[tuple[str, int, str, str]]], SiteNames]:
+) -> tuple[dict[str, set[tuple[str, int, str, str]]], dict[tuple[str, int, str, str], str]]:
     """Read the final per-window shards into the in-memory site union.
 
     ``rsid_by_site`` is inserted in ``(rank, site)`` order (issue #192): the
@@ -690,24 +689,18 @@ def materialize_site_union(
     """
     tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]] = {}
     rsid_by_site: dict[tuple[str, int, str, str], str] = {}
-    hg19_names: dict[tuple[str, int, str, str], str] = {}
-    ranked: list[tuple[tuple[int, int], tuple[str, int, str, str], str, str]] = []
+    ranked: list[tuple[tuple[int, int], tuple[str, int, str, str], str]] = []
     for key in sorted(window_shards.shards):
         spec = window_shards.shards[key]
         sites = tuples_by_assembly.setdefault(key[0], set())
         for site, rsid in iter_shard(spec.path):
             sites.add(site)
             if rsid:
-                ranked.append((spec.rank, site, rsid, key[0]))
+                ranked.append((spec.rank, site, rsid))
     ranked.sort()
-    shared = tuples_by_assembly.get("hg19", set()) & tuples_by_assembly.get("hg38", set())
-    for _rank, site, rsid, assembly in ranked:
+    for _rank, site, rsid in ranked:
         rsid_by_site.setdefault(site, rsid)
-        if site in shared and assembly == "hg19":
-            hg19_names.setdefault(site, rsid)
-    for site in shared:
-        hg19_names.setdefault(site, "")
-    return tuples_by_assembly, SiteNames(rsid_by_site, hg19_names)
+    return tuples_by_assembly, rsid_by_site
 
 
 @contextmanager

@@ -39,6 +39,8 @@ from zarr.storage import LocalStore
 
 import opengwasdb.layouts.dense.complete as complete_module
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.encoding import write_dense_se_side_arrays
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.complete import complete_dense_store, resume_dense_completion
@@ -140,7 +142,8 @@ def inputs(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
 
 def _complete(source: Path, panel: Path, dst: Path, n_workers: int) -> Path:
     complete_dense_store(
-        source, dst, panel, ancestry="EUR", min_cor=0.0, release_id="comp", n_workers=n_workers
+        source, dst, PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp", n_workers=n_workers),
     )
     return dst
 

@@ -20,6 +20,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.model.enums import EafScope
@@ -202,7 +204,7 @@ def _ld_panel(tmp_path: Path) -> Path:
     a = rng.standard_normal((len(snps), len(snps)))
     ld = a @ a.T + np.eye(len(snps)) * len(snps) * 0.1
     buf = io.BytesIO()
-    with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
+    with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as gz:
         for row in ld:
             gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
     (block_dir / "1-500000.unphased.vcor1.gz").write_bytes(buf.getvalue())
@@ -219,7 +221,10 @@ def test_dense_completion_keeps_the_observed_frequencies(tmp_path: Path):
 
     observed = _build(tmp_path, "dense")
     completed = tmp_path / "dense-completed.opengwasdb"
-    complete_dense_store(observed, completed, _ld_panel(tmp_path), ancestry="EUR", min_cor=0.0)
+    complete_dense_store(
+        observed, completed, PanelSource(_ld_panel(tmp_path), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0),
+    )
 
     with query_store(completed) as query:
         result = query.phewas(_ALID)
@@ -265,7 +270,10 @@ def test_hybrid_completion_keeps_frequencies_in_both_components(tmp_path: Path):
     assert len(before) == 2, "fixture must span both components for this to mean anything"
 
     completed = tmp_path / "hybrid-split-completed.opengwasdb"
-    complete_hybrid_store(observed, completed, _ld_panel(tmp_path), ancestry="EUR", min_cor=0.0)
+    complete_hybrid_store(
+        observed, completed, PanelSource(_ld_panel(tmp_path), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0),
+    )
 
     with query_store(completed) as query:
         on_panel = query.phewas(_ALID)

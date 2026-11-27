@@ -67,6 +67,7 @@ import numpy as np
 from opengwasdb.encoding.timing import log_phase
 from opengwasdb.model.analyses import Analysis
 from opengwasdb.model.enums import EafOrientationMethod, EafOrientationOutcome
+from opengwasdb.model.ld_panel_files import chromosome_tables, list_chromosomes
 from opengwasdb.store_reader.identity import VariantNormalisationError
 from opengwasdb.variants.normalise import orient_to_canonical
 
@@ -388,8 +389,8 @@ def _iter_panel_directory(
             f"present: {sorted(p.name for p in root.iterdir() if p.is_dir())}"
         )
     block_files = sorted(
-        (p for chrom_dir in sorted(ancestry_dir.iterdir()) if chrom_dir.is_dir()
-         for p in chrom_dir.glob("*.tsv")),
+        (table for chrom in list_chromosomes(root, ancestry)
+         for table in chromosome_tables(root, ancestry, chrom)),
         key=lambda p: (p.parent.name, p.name),
     )
     if not block_files:

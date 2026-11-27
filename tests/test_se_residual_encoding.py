@@ -11,6 +11,8 @@ import zarr
 from dense_sources import build_dense_from_records
 from residual_fixtures import residual_eligible_records
 
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
 from opengwasdb.encoding.codec import SeExceptionBuilder, StoreCodec
 from opengwasdb.encoding.measure import fit_se_grid
@@ -532,7 +534,7 @@ def _write_ld_block(
     a = rng.standard_normal((len(variants), len(variants)))
     ld = a @ a.T + np.eye(len(variants)) * len(variants) * 0.1
     buffer = io.BytesIO()
-    with gzip.GzipFile(fileobj=buffer, mode="wb") as gz:
+    with gzip.GzipFile(fileobj=buffer, mode="wb", mtime=0) as gz:
         for row in ld:
             gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
     (block_dir / f"{name}.unphased.vcor1.gz").write_bytes(buffer.getvalue())
@@ -599,7 +601,10 @@ def test_dense_completion_round_trips_imputed_cells_under_a_residual_plan(tmp_pa
     assert StoreManifest.load(source).encoding.se.is_residual
 
     completed = tmp_path / "comp.opengwasdb"
-    complete_dense_store(source, completed, panel, ancestry="EUR", min_cor=0.0, release_id="comp")
+    complete_dense_store(
+        source, completed, PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp"),
+    )
 
     manifest = StoreManifest.load(completed)
     assert manifest.encoding.se == StoreManifest.load(source).encoding.se
@@ -729,7 +734,8 @@ def test_residual_completion_never_writes_se_without_eaf(tmp_path) -> None:
 
     completed = tmp_path / "no-freq.opengwasdb"
     complete_dense_store(
-        source, completed, panel, ancestry="EUR", min_cor=0.0, release_id="no-freq"
+        source, completed, PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="no-freq"),
     )
 
     manifest = StoreManifest.load(completed)

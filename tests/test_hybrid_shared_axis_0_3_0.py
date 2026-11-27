@@ -31,6 +31,8 @@ import numpy as np
 import pytest
 from format_0_2_3 import as_0_2_3
 
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.store.open import (
     COMPLETED_DENSE_COMPONENT_COPIES,
@@ -312,7 +314,9 @@ def test_completing_a_0_3_0_hybrid_answers_as_completing_its_0_2_3_form(
     assert (legacy / "dense" / "variants.tsv.gz").exists(), "fixture: a 0.2.3 Dense copy"
 
     from_legacy = tmp_path / "from_legacy.opengwasdb"
-    complete_hybrid_store(legacy, from_legacy, ld, min_cor=0.0, thresh=0.9)
+    complete_hybrid_store(
+        legacy, from_legacy, PanelSource(ld), CompletionOptions(min_cor=0.0, thresh=0.9)
+    )
 
     reference = release_digests(current)
     assert reference["shapes"], "fixture: the completion answers questions"

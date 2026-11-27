@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import gzip
-import io
+import json
 import shutil
 import struct
 from pathlib import Path
 
 import numpy as np
+import panel_identity_checks as checks
 import pytest
 import zarr
+from ld_blocks import write_gzipped_matrix
 from region_tables import NO_SIGNIFICANT_REGIONS, every_analysis, with_regions
 from stored_rows import stored_rows
 
-from opengwasdb.completion.ld_panel import LdPanelNotFoundError
+from opengwasdb.completion.ld_panel import LdPanelNotFoundError, PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.ragged.build_besd import build_ragged_from_besd
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.query import query_store
@@ -61,6 +64,25 @@ def _write_besd_sparse_3f(path: Path, n_probes: int, probe_assocs: list[list[tup
         fh.write(struct.pack(f"<{col_num}Q", *cols))
         fh.write(struct.pack(f"<{len(val)}I", *rowid))
         fh.write(struct.pack(f"<{len(val)}f", *val))
+
+
+def _write_checkpoint(dst: Path, observed_store: Path, ld_panel: Path, **extra) -> Path:
+    """A checkpoint directory for a ragged completion of ``observed_store`` against
+    ``ld_panel``, started as a run starts one (`start_checkpoint`), with ``extra``
+    build parameters."""
+    from opengwasdb.completion.checkpoint import checkpoint_dir_for, start_checkpoint
+
+    checkpoint_dir = checkpoint_dir_for(dst)
+    (checkpoint_dir / "blocks").mkdir(parents=True)
+    params = {
+        "source_path": str(Path(observed_store).resolve()),
+        "dest_path": str(dst.resolve()),
+        "ld_dir": str(Path(ld_panel).resolve()),
+        "ancestry": "EUR", "cis_window_bp": 500_000, "min_cor": 0.0, "thresh": 0.9,
+        "release_id": None, "impute_analysis_ids": None, "region_cap_bp": 1_000_000, **extra,
+    }
+    start_checkpoint(checkpoint_dir, params, PanelSource(ld_panel))
+    return checkpoint_dir
 
 
 def _make_besd_fixture(
@@ -124,11 +146,7 @@ def _make_ld_panel(tmp_path: Path, chrom: str, start: int, end: int) -> Path:
     A = rng.standard_normal((n, n))
     ld = A @ A.T + np.eye(n) * n * 0.1
 
-    buf = io.BytesIO()
-    with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
-        for row in ld:
-            gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
-    (panel_dir / f"{block_name}.unphased.vcor1.gz").write_bytes(buf.getvalue())
+    write_gzipped_matrix(panel_dir / f"{block_name}.unphased.vcor1.gz", ld)
 
     return tmp_path / "ld_panel"
 
@@ -200,8 +218,8 @@ def _completed_store_seed(
     panel = shutil.copytree(_ld_panel_seed, root / "ld_panel")
     dst = root / "comp.opengwasdb"
     complete_ragged_store(
-        observed, dst, panel,
-        ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp-v1",
+        observed, dst, PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"), cis_window_bp=500_000,
     )
     return dst
 
@@ -258,7 +276,8 @@ class TestTopHitCountsRefreshedByCompletion:
 
         dst = tmp_path / "comp_stale.opengwasdb"
         complete_ragged_store(
-            observed_store, dst, ld_panel, ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+            observed_store, dst, PanelSource(ld_panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0), cis_window_bp=500_000,
         )
 
         dst_rows = sorted(
@@ -299,8 +318,8 @@ def _overlapping_rich_completion(tmp_path, monkeypatch, fit):
     assert len(list(chromosome.glob("*.tsv"))) == 2  # fixture first: two blocks
     dst = tmp_path / "overlapping.opengwasdb"
     complete_ragged_store(
-        observed, dst, panel,
-        ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp-v1",
+        observed, dst, PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"), cis_window_bp=500_000,
     )
     return dst
 
@@ -436,7 +455,6 @@ class TestCompletionFiles:
         assert not (completed_store / "traits.tsv.gz").exists()
 
     def test_manifest_completion_state(self, completed_store):
-        import json
         m = json.loads((completed_store / "manifest.json").read_text())
         assert m["completion_state"] == "reference_completed"
         assert "completion" in m["provenance"]
@@ -446,7 +464,6 @@ class TestCompletionFiles:
         fills imputed cells without changing what the release retains, so the
         source's value is the completed release's -- not a layout default
         (issue #298)."""
-        import json
 
         prefix = _make_besd_fixture(tmp_path)
         source = tmp_path / "signals.opengwasdb"
@@ -462,8 +479,11 @@ class TestCompletionFiles:
 
         completed = tmp_path / "completed.opengwasdb"
         complete_ragged_store(
-            with_regions(source, NO_SIGNIFICANT_REGIONS), completed, ld_panel,
-            ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+            with_regions(source, NO_SIGNIFICANT_REGIONS),
+            completed,
+            PanelSource(ld_panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0),
+            cis_window_bp=500_000,
         )
 
         manifest = json.loads((completed / "manifest.json").read_text())
@@ -475,7 +495,6 @@ class TestCompletionFiles:
     ):
         """The ragged capacity is the whole point: a `signals_only` source stays
         `signals_only` through completion, and the command says so (#294, #298)."""
-        import json
 
         from typer.testing import CliRunner
 
@@ -602,8 +621,8 @@ class TestCompletionFiles:
 
         completed = tmp_path / "ssf_comp.opengwasdb"
         complete_ragged_store(
-            observed, completed, ld_panel,
-            ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp",
+            observed, completed, PanelSource(ld_panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0, release_id="comp"), cis_window_bp=500_000,
         )
 
         from opengwasdb.variants.axis import VariantAxis
@@ -635,7 +654,9 @@ class TestCompletionFiles:
         self, tmp_path, observed_store, ld_panel, completed_store
     ):
         with pytest.raises(FileExistsError):
-            complete_ragged_store(observed_store, completed_store, ld_panel, min_cor=0.0,
+            complete_ragged_store(
+                observed_store, completed_store, PanelSource(ld_panel),
+                CompletionOptions(min_cor=0.0),
             )
 
     def test_ld_dir_already_holding_the_ancestry_directory_raises(
@@ -652,7 +673,8 @@ class TestCompletionFiles:
         dst = tmp_path / "should_not_exist.opengwasdb"
         with pytest.raises(LdPanelNotFoundError):
             complete_ragged_store(
-                observed_store, dst, ld_panel / "EUR", ancestry="EUR", min_cor=0.0,
+                observed_store, dst, PanelSource(ld_panel / "EUR", ancestry="EUR"),
+                CompletionOptions(min_cor=0.0),
             )
         assert not dst.exists()
 
@@ -686,11 +708,7 @@ class TestPanelAlidCanonicalisation:
         rng = np.random.default_rng(0)
         A = rng.standard_normal((n, n))
         ld = A @ A.T + np.eye(n) * n * 0.1
-        buf = io.BytesIO()
-        with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
-            for row in ld:
-                gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
-        (panel_dir / "block.unphased.vcor1.gz").write_bytes(buf.getvalue())
+        write_gzipped_matrix(panel_dir / "block.unphased.vcor1.gz", ld)
 
     @classmethod
     def completed_on_underscore_panel(
@@ -704,8 +722,8 @@ class TestPanelAlidCanonicalisation:
         )
         completed_store = tmp_path / "comp.opengwasdb"
         complete_ragged_store(
-            observed_store, completed_store, tmp_path / "ld_panel_us",
-            ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp-v1",
+            observed_store, completed_store, PanelSource(tmp_path / "ld_panel_us", ancestry="EUR"),
+            CompletionOptions(min_cor=0.0, release_id="comp-v1"), cis_window_bp=500_000,
         )
         return completed_store
 
@@ -891,11 +909,7 @@ class TestCompletedStoreKeepsObservedStatistics:
         rng = np.random.default_rng(0)
         matrix = rng.standard_normal((n, n))
         ld = matrix @ matrix.T + np.eye(n) * n * 0.1
-        buf = io.BytesIO()
-        with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
-            for row in ld:
-                gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
-        (panel_dir / "block1.unphased.vcor1.gz").write_bytes(buf.getvalue())
+        write_gzipped_matrix(panel_dir / "block1.unphased.vcor1.gz", ld)
 
     def test_observed_z_se_and_eaf_survive_completion(self, tmp_path):
         from opengwasdb.layouts.ragged.complete import complete_ragged_store
@@ -944,8 +958,8 @@ class TestCompletedStoreKeepsObservedStatistics:
         self._write_panel(tmp_path / "panel" / "EUR" / "1")
         completed = tmp_path / "comp.opengwasdb"
         complete_ragged_store(
-            observed, completed, tmp_path / "panel", ancestry="EUR",
-            cis_window_bp=500_000, min_cor=0.0, release_id="comp",
+            observed, completed, PanelSource(tmp_path / "panel", ancestry="EUR"),
+            CompletionOptions(min_cor=0.0, release_id="comp"), cis_window_bp=500_000,
         )
 
         comp = stored_rows(completed, 0)
@@ -1091,14 +1105,16 @@ class TestParallelAndResume:
     def test_n_workers_matches_serial(self, tmp_path, observed_store, ld_panel):
         serial_dst = tmp_path / "serial.opengwasdb"
         serial = complete_ragged_store(
-            observed_store, serial_dst, ld_panel,
-            ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="serial",
+            observed_store, serial_dst, PanelSource(ld_panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0, release_id="serial"), cis_window_bp=500_000,
         )
         parallel_dst = tmp_path / "parallel.opengwasdb"
         parallel = complete_ragged_store(
-            observed_store, parallel_dst, ld_panel,
-            ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="parallel",
-            n_workers=2,
+            observed_store,
+            parallel_dst,
+            PanelSource(ld_panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0, release_id="parallel", n_workers=2),
+            cis_window_bp=500_000,
         )
         assert parallel.n_variants == serial.n_variants
         assert parallel.n_imputed == serial.n_imputed
@@ -1128,33 +1144,18 @@ class TestParallelAndResume:
         assert "(n_workers=2)" in result.output
 
     def test_resume_matches_fresh_run(self, tmp_path, observed_store, ld_panel):
-        import json
 
-        from opengwasdb.completion.checkpoint import checkpoint_dir_for
         from opengwasdb.layouts.ragged.complete import resume_ragged_completion
 
         fresh_dst = tmp_path / "fresh.opengwasdb"
         fresh = complete_ragged_store(
-            observed_store, fresh_dst, ld_panel,
-            ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+            observed_store, fresh_dst, PanelSource(ld_panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0), cis_window_bp=500_000,
         )
 
         resumable_dst = tmp_path / "resumable.opengwasdb"
-        checkpoint_dir = checkpoint_dir_for(resumable_dst)
-        checkpoint_dir.mkdir(parents=True)
-        (checkpoint_dir / "blocks").mkdir()
-        (checkpoint_dir / "build_params.json").write_text(
-            json.dumps({
-                "source_path": str(Path(observed_store).resolve()),
-                "dest_path": str(resumable_dst.resolve()),
-                "ld_dir": str(Path(ld_panel).resolve()),
-                "ancestry": "EUR", "cis_window_bp": 500_000,
-                "min_cor": 0.0, "thresh": 0.9,
-                "release_id": None, "ld_panel_id": "eur-hg38-gpm",
-                "impute_analysis_ids": None, "region_cap_bp": 1_000_000,
-                "regions": None, "regions_sha256": None,
-            }),
-            encoding="utf-8",
+        checkpoint_dir = _write_checkpoint(
+            resumable_dst, observed_store, ld_panel, regions=None, regions_sha256=None
         )
         resumed = resume_ragged_completion(checkpoint_dir)
 
@@ -1188,8 +1189,8 @@ class TestParallelAndResume:
         dst = tmp_path / "resumed.opengwasdb"
         with pytest.raises(RuntimeError, match="simulated crash"):
             complete_ragged_store(
-                observed_store, dst, ld_panel,
-                ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+                observed_store, dst, PanelSource(ld_panel, ancestry="EUR"),
+                CompletionOptions(min_cor=0.0), cis_window_bp=500_000,
             )
         monkeypatch.undo()
 
@@ -1202,26 +1203,11 @@ class TestParallelAndResume:
         resumed beside ones bounded to the regions, its fills outside them would be
         counted in `completion_quality` and stored nowhere. Its build parameters
         record no region table, which is how a resume tells it apart."""
-        import json
 
-        from opengwasdb.completion.checkpoint import checkpoint_dir_for
         from opengwasdb.layouts.ragged.complete import resume_ragged_completion
 
         dst = tmp_path / "resumed.opengwasdb"
-        checkpoint_dir = checkpoint_dir_for(dst)
-        (checkpoint_dir / "blocks").mkdir(parents=True)
-        (checkpoint_dir / "build_params.json").write_text(
-            json.dumps({
-                "source_path": str(Path(observed_store).resolve()),
-                "dest_path": str(dst.resolve()),
-                "ld_dir": str(Path(ld_panel).resolve()),
-                "ancestry": "EUR", "cis_window_bp": 500_000,
-                "min_cor": 0.0, "thresh": 0.9,
-                "release_id": None, "ld_panel_id": "eur-hg38-gpm",
-                "impute_analysis_ids": None, "region_cap_bp": 1_000_000,
-            }),
-            encoding="utf-8",
-        )
+        checkpoint_dir = _write_checkpoint(dst, observed_store, ld_panel)
 
         with pytest.raises(ValueError, match="issue #430"):
             resume_ragged_completion(checkpoint_dir)
@@ -1704,11 +1690,7 @@ def _make_rich_ld_panel(tmp_path: Path) -> Path:
     rng = np.random.default_rng(0)
     A = rng.standard_normal((n, n))
     ld = A @ A.T + np.eye(n) * n * 0.1
-    buf = io.BytesIO()
-    with gzip.GzipFile(fileobj=buf, mode="wb") as gz:
-        for row in ld:
-            gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
-    (panel_dir / "900000-1300000.unphased.vcor1.gz").write_bytes(buf.getvalue())
+    write_gzipped_matrix(panel_dir / "900000-1300000.unphased.vcor1.gz", ld)
     return tmp_path / "rich_panel"
 
 
@@ -1818,8 +1800,11 @@ class TestGeneTargetLessAnalyses:
         it."""
         dst = tmp_path / "with_positions.opengwasdb"
         complete_ragged_store(
-            with_regions(rich_observed_store, NO_SIGNIFICANT_REGIONS), dst, rich_panel,
-            ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+            with_regions(rich_observed_store, NO_SIGNIFICANT_REGIONS),
+            dst,
+            PanelSource(rich_panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0),
+            cis_window_bp=500_000,
         )
         assert self.PANEL_ONLY_ALID in self._alids(dst)
 
@@ -1833,8 +1818,8 @@ class TestGeneTargetLessAnalyses:
             rich_observed_store, "significant_trans", "1", 900_000, 1_150_000
         ))
         complete_ragged_store(
-            rich_observed_store, dst, rich_panel,
-            ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+            rich_observed_store, dst, PanelSource(rich_panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0), cis_window_bp=500_000,
         )
 
         assert self.PANEL_ONLY_ALID in self._alids(dst), (
@@ -1862,8 +1847,8 @@ class TestGeneTargetLessAnalyses:
         assert len(region_ids) == 1, "the fixture must hold a region for the panel to miss"
 
         result = complete_ragged_store(
-            rich_observed_store, dst, empty_panel,
-            ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
+            rich_observed_store, dst, PanelSource(empty_panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0), cis_window_bp=500_000,
         )
 
         assert result.n_imputed == 0
@@ -2219,8 +2204,12 @@ def test_a_carried_analysis_is_written_in_the_completed_axis_order(tmp_path):
     completed = tmp_path / "comp.opengwasdb"
 
     complete_ragged_store(
-        observed, completed, _make_ld_panel(tmp_path, "1", 900_000, 1_300_000),
-        ancestry="EUR", cis_window_bp=500_000, release_id="comp", impute_analysis_ids=set(),
+        observed,
+        completed,
+        PanelSource(_make_ld_panel(tmp_path, "1", 900_000, 1_300_000), ancestry="EUR"),
+        CompletionOptions(release_id="comp"),
+        cis_window_bp=500_000,
+        impute_analysis_ids=set(),
     )
 
     ragged = zarr.open_group(str(completed / RAGGED_ZARR_PATH), mode="r")
@@ -2264,8 +2253,11 @@ def test_a_stored_missing_observed_row_is_never_filled(tmp_path):
     completed = tmp_path / "comp.opengwasdb"
 
     result = complete_ragged_store(
-        observed, completed, write_eaf_carrying_panel(tmp_path / "ld_panel"), ancestry="EUR",
-        cis_window_bp=1_000_000, min_cor=0.0, release_id="comp",
+        observed,
+        completed,
+        PanelSource(write_eaf_carrying_panel(tmp_path / "ld_panel"), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp"),
+        cis_window_bp=1_000_000,
     )
 
     with closing(VariantAxis(completed)) as axis:
@@ -2293,3 +2285,44 @@ def test_a_stored_missing_observed_row_is_never_filled(tmp_path):
     rules = {"completion.quality_counts", "completion.imputed_total", "completion.missing_total"}
     result = validate_store(completed, rules=rules)
     assert result.failed() == set(), result.errors
+
+
+
+def _record(store: Path) -> dict:
+    return open_store(store).manifest.provenance["completion"]
+
+
+class TestLdPanelIdentity(checks.PanelIdentityTests):
+    """A completion records the panel it read, not a constant (#327)."""
+
+    @pytest.fixture
+    def ways(self, observed_store, monkeypatch):
+        """The three callables `panel_identity_checks` runs a Ragged completion through."""
+        from opengwasdb.layouts.ragged import complete as ragged_module
+        from opengwasdb.layouts.ragged.complete import resume_ragged_completion
+
+        def complete(dst, panel, name=None):
+            return complete_ragged_store(
+                observed_store, dst, PanelSource(panel, ancestry="EUR", name=name),
+                CompletionOptions(min_cor=0.0), cis_window_bp=500_000,
+            ).output_path
+
+        interrupt = checks.interrupting(complete, ragged_module, monkeypatch)
+        return complete, interrupt, resume_ragged_completion
+
+    def test_the_cli_names_the_panel_and_refuses_a_blank_name(
+        self, tmp_path, observed_store, ld_panel
+    ):
+        from typer.testing import CliRunner
+
+        from opengwasdb.cli.main import app
+
+        argv = [
+            "complete-ragged", str(observed_store), str(tmp_path / "cli.opengwasdb"),
+            "--ld-panel", str(ld_panel), "--min-cor", "0.0", "--cis-window-bp", "500000",
+        ]
+        blank = CliRunner().invoke(app, [*argv, "--ld-panel-id", ""])
+        assert blank.exit_code != 0 and "empty" in blank.output
+        named = CliRunner().invoke(app, [*argv, "--ld-panel-id", "cli-named"])
+        assert named.exit_code == 0, named.output
+        assert _record(tmp_path / "cli.opengwasdb")["ld_panel_id"] == "cli-named"

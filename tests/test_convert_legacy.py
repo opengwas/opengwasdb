@@ -26,6 +26,8 @@ from reader_constants import set_reader_constant
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.query import query_store
 from opengwasdb.store.legacy_conversion import LegacyConversion
 from opengwasdb.store.open import open_store
@@ -587,8 +589,10 @@ def panel_rows(tmp_path_factory: pytest.TempPathFactory):
     build_dense_fixture([associations], observed, store_id="test", release_id="obs-v1",
                         reference_assembly="GRCh38")
     completed = root / "comp.opengwasdb"
-    complete_dense_store(observed, completed, _make_ld_panel(root), ancestry="EUR",
-                         min_cor=0.0, release_id="comp-v1")
+    complete_dense_store(
+        observed, completed, PanelSource(_make_ld_panel(root), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"),
+    )
     source = as_0_2_0(as_0_2_3(completed))
     return source, rewrite_release(source, root / "converted", legacy=UNLIFTED)
 

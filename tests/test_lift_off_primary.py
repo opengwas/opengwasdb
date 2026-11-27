@@ -576,16 +576,16 @@ def test_the_readers_lift_names_a_row_it_drops_off_the_primary_assembly(tmp_path
 
 
 def test_the_folds_raw_key_spelling_is_the_packed_keys():
-    """`_lift_hg19` names an off-primary site by `raw_site_key`; the fold compares
+    """`_lift_hg19` names an off-primary site by joining its fields; the fold compares
     that with the key it decodes, so the two must spell a site alike."""
     import numpy as np
 
+    from opengwasdb.layouts.hybrid.key_table import raw_key
     from opengwasdb.layouts.hybrid.unknown_keys import decode_packed, encode_key
-    from opengwasdb.variants.routing.keys import raw_site_key
 
     for text in ("5:1000:G:A", "X:77:C:T"):
         chrom, pos, ref, alt = text.split(":")
-        assert raw_site_key((chrom, int(pos), ref, alt)) == text
+        assert raw_key((chrom, int(pos), ref, alt)) == text
         assert decode_packed(np.array([encode_key(text)], dtype=np.uint64)) == [text]
 
 

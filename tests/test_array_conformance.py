@@ -43,6 +43,8 @@ from typing import Any
 import numpy as np
 import pytest
 
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.encoding import StoreCodec
 from opengwasdb.store.arrays import (
     component_variant_chunk,
@@ -189,12 +191,8 @@ def _build_stores(root: Path) -> list[_BuiltStore]:
     )
     completed = d / "comp.opengwasdb"
     complete_dense_store(
-        observed,
-        completed,
-        tdc._make_ld_panel(d),
-        ancestry="EUR",
-        min_cor=0.0,
-        release_id="comp-v1",
+        observed, completed, PanelSource(tdc._make_ld_panel(d), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"),
     )
     stores.append(_BuiltStore("dense-completion", completed, dense_planes_whole=False))
 
@@ -239,11 +237,9 @@ def _build_stores(root: Path) -> list[_BuiltStore]:
     complete_ragged_store(
         observed,
         completed,
-        trc._make_ld_panel(d, "1", 900_000, 1_300_000),
-        ancestry="EUR",
+        PanelSource(trc._make_ld_panel(d, "1", 900_000, 1_300_000), ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"),
         cis_window_bp=500_000,
-        min_cor=0.0,
-        release_id="comp-v1",
     )
     stores.append(_BuiltStore("ragged-completion", completed, dense_planes_whole=False))
 
@@ -291,12 +287,8 @@ def _build_stores(root: Path) -> list[_BuiltStore]:
         source = thc._build_source(d)
         completed = d / "comp.opengwasdb"
         complete_hybrid_store(
-            source,
-            completed,
-            thc._make_ld_panel(d),
-            min_cor=0.0,
-            thresh=0.9,
-            n_workers=n_workers,
+            source, completed, PanelSource(thc._make_ld_panel(d)),
+            CompletionOptions(min_cor=0.0, thresh=0.9, n_workers=n_workers),
         )
         # Assert the fixture really carries both components before walking it.
         assert (completed / "dense" / "data.zarr").is_dir(), (

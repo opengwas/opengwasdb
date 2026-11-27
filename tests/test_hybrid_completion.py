@@ -24,6 +24,8 @@ from residual_fixtures import write_gwas_vcf_with_eaf
 from store_digest import store_digest
 
 from benchmarks.compare_top_hits import compare_top_hits
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
 from opengwasdb.layouts.hybrid.complete import HybridCompletionResult, complete_hybrid_store
 from opengwasdb.query import query_store
@@ -160,7 +162,7 @@ def _completed_hybrid_seed(
     src = _build_source(root)
     dst = root / "dst.opengwasdb"
     result = complete_hybrid_store(
-        src, dst, _make_ld_panel(root), min_cor=0.0, thresh=0.9
+        src, dst, PanelSource(_make_ld_panel(root)), CompletionOptions(min_cor=0.0, thresh=0.9)
     )
     return src, dst, result
 
@@ -195,7 +197,10 @@ def test_a_hybrid_stamped_0_2_1_without_a_region_table_is_refused(
     dst = tmp_path / "restamped-dst.opengwasdb"
 
     with pytest.raises(UnsupportedFormatVersion, match="0.2.1 Store sorts an indel's alleles"):
-        complete_hybrid_store(src, dst, _make_ld_panel(tmp_path), min_cor=0.0, thresh=0.9)
+        complete_hybrid_store(
+            src, dst, PanelSource(_make_ld_panel(tmp_path)),
+            CompletionOptions(min_cor=0.0, thresh=0.9),
+        )
     assert not dst.exists()
 
 
@@ -245,7 +250,7 @@ def test_completion_keeps_a_populated_dense_overflow_table(tmp_path):
 
     ld = _residual_ld_panel_with_crossover(tmp_path, crossover_alid, crossover_eaf)
     dst = tmp_path / "comp.opengwasdb"
-    complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
+    complete_hybrid_store(src, dst, PanelSource(ld), CompletionOptions(min_cor=0.0, thresh=0.9))
 
     completed = zarr.open_group(str(dst / "dense" / "data.zarr"), mode="r")
     after = np.asarray(completed["z_overflow_index"][:], dtype=np.int64)
@@ -538,9 +543,13 @@ def test_residual_hybrid_crossover_rebuilds_index_with_completed_encoding(
     caplog.clear()
     ld = _residual_ld_panel_with_crossover(tmp_path, crossover_alid, crossover_eaf)
     dst = tmp_path / "dst.opengwasdb"
-    result = complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
+    result = complete_hybrid_store(
+        src, dst, PanelSource(ld), CompletionOptions(min_cor=0.0, thresh=0.9)
+    )
     parallel_dst = tmp_path / "parallel.opengwasdb"
-    complete_hybrid_store(src, parallel_dst, ld, min_cor=0.0, thresh=0.9, n_workers=2)
+    complete_hybrid_store(
+        src, parallel_dst, PanelSource(ld), CompletionOptions(min_cor=0.0, thresh=0.9, n_workers=2)
+    )
     assert store_digest(dst) == store_digest(parallel_dst)
     assert_same_release(dst / "dense", parallel_dst / "dense")
     top_hits = compare_top_hits(dst / "dense", parallel_dst / "dense")
@@ -610,6 +619,19 @@ def test_residual_hybrid_crossover_rebuilds_index_with_completed_encoding(
         assert f"n_workers={requested}, 32 rows per band" in plan
 
 
+def _complete_with_crossover(tmp_path: Path):
+    """Complete the crossover source against its panel, which must validate."""
+    src = _build_source(tmp_path)
+    dst = tmp_path / "dst.opengwasdb"
+    ld = _make_ld_panel_with_crossover(tmp_path)
+    result = complete_hybrid_store(
+        src, dst, PanelSource(ld), CompletionOptions(min_cor=0.0, thresh=0.9)
+    )
+    validation = validate_store(dst)
+    assert validation.ok, validation.errors
+    return dst, result
+
+
 def test_panel_extension_crossover_stays_disjoint_and_keeps_the_real_observation(tmp_path):
     """issue #99: when the LD panel extends the Dense Component to cover a
     variant already carrying a real observed overflow association
@@ -618,14 +640,7 @@ def test_panel_extension_crossover_stays_disjoint_and_keeps_the_real_observation
     observation folds into the Dense Component (not an LD-imputed guess),
     and the overflow no longer carries it.
     """
-    src = _build_source(tmp_path)
-    ld = _make_ld_panel_with_crossover(tmp_path)
-    dst = tmp_path / "dst.opengwasdb"
-
-    result = complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
-
-    validation = validate_store(dst)
-    assert validation.ok, validation.errors
+    dst, result = _complete_with_crossover(tmp_path)
 
     # The crossed-over variant is on the Dense Component's own axis now.
     dense_axis = open_store(dst).dense_component()
@@ -672,8 +687,10 @@ def test_a_crossover_hit_is_counted_by_the_final_tiers(tmp_path):
 
     src = _build_source(tmp_path)
     dst = tmp_path / "dst.opengwasdb"
-    complete_hybrid_store(src, dst, _make_ld_panel_with_crossover(tmp_path), min_cor=0.0,
-                          thresh=0.9)
+    complete_hybrid_store(
+        src, dst, PanelSource(_make_ld_panel_with_crossover(tmp_path)),
+        CompletionOptions(min_cor=0.0, thresh=0.9),
+    )
 
     rows = sorted(read_analyses(dst / "analyses.tsv").rows, key=lambda r: int(r["analysis_index"]))
     trait_a = next(int(r["analysis_index"]) for r in rows if r["analysis_id"] == "trait_a")
@@ -709,7 +726,7 @@ def test_an_observed_crossover_stays_in_each_blocks_attempts_and_leaves_the_tota
         block, "impute_z_block", lambda z, *args, **kwargs: (np.full(len(z), 2.2), 0.9)
     )
     completed = tmp_path / "completed.opengwasdb"
-    complete_hybrid_store(source, completed, panel, min_cor=0.0)
+    complete_hybrid_store(source, completed, PanelSource(panel), CompletionOptions(min_cor=0.0))
 
     dense = open_store(completed / "dense")
     mask = np.asarray(dense.arrays(mode="r")["imputed"][:])
@@ -765,7 +782,7 @@ def test_a_crossover_stays_in_every_owning_blocks_attempts_but_not_the_ceders(
         block, "impute_z_block", lambda z, *args, **kwargs: (np.full(len(z), 2.2), 0.9)
     )
     completed = tmp_path / "completed.opengwasdb"
-    complete_hybrid_store(source, completed, panel, min_cor=0.0)
+    complete_hybrid_store(source, completed, PanelSource(panel), CompletionOptions(min_cor=0.0))
 
     # Each block that owns the crossover filled it; the ceder neither fills nor counts it.
     assert quality_counts(completed / "dense") == {
@@ -808,7 +825,7 @@ def _crossover_release(
         lambda z, *args, **kwargs: (np.broadcast_to(fills(len(z)), (len(z),)).astype(float), 0.9),
     )
     completed = tmp_path / "completed.opengwasdb"
-    complete_hybrid_store(source, completed, panel, min_cor=0.0)
+    complete_hybrid_store(source, completed, PanelSource(panel), CompletionOptions(min_cor=0.0))
     return source, completed
 
 
@@ -973,14 +990,7 @@ def test_result_counts_agree_with_manifest_and_arrays(tmp_path: Path) -> None:
     """The counts a completed Hybrid release reports -- result object, manifest
     provenance and the arrays the phases wrote -- must agree (issue #130): a
     phase split that mis-tallied one would ship a silently wrong manifest."""
-    src = _build_source(tmp_path)
-    ld = _make_ld_panel_with_crossover(tmp_path)
-    dst = tmp_path / "dst.opengwasdb"
-
-    result = complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
-
-    validation = validate_store(dst)
-    assert validation.ok, validation.errors
+    dst, result = _complete_with_crossover(tmp_path)
 
     manifest = StoreManifest.load(dst)
     prov = manifest.provenance
@@ -1113,7 +1123,8 @@ def test_a_half_missing_overflow_cell_is_refused(tmp_path: Path) -> None:
         InvalidAssociations, match=r"source's Ragged Overflow: 1 association cell.*partial 1"
     ):
         complete_hybrid_store(
-            src, tmp_path / "dst.opengwasdb", _make_ld_panel(tmp_path), min_cor=0.0, thresh=0.9
+            src, tmp_path / "dst.opengwasdb", PanelSource(_make_ld_panel(tmp_path)),
+            CompletionOptions(min_cor=0.0, thresh=0.9),
         )
     assert not (tmp_path / "dst.opengwasdb").exists()
 

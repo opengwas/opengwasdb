@@ -43,6 +43,8 @@ from stored_rows import stored_rows
 from typer.testing import CliRunner
 
 from opengwasdb.cli.main import app
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.ragged.complete import complete_ragged_store
 from opengwasdb.model.analyses import read_analysis_records
 from opengwasdb.store_reader.csr import RAGGED_ZARR_PATH, RaggedCSRReader
@@ -135,8 +137,8 @@ def _pair_seed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path, Pa
     panel = trc._make_rich_ld_panel(root)
     completed = root / "comp.opengwasdb"
     complete_ragged_store(
-        observed, completed, panel, ancestry="EUR", cis_window_bp=500_000, min_cor=0.0,
-        release_id="comp-v1",
+        observed, completed, PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"), cis_window_bp=500_000,
     )
     return observed, completed, panel
 
@@ -750,8 +752,8 @@ def _region_pair_seed(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, P
     panel = _write_multi_block_panel(root)
     completed = root / "comp.opengwasdb"
     complete_ragged_store(
-        observed, completed, panel, ancestry="EUR", cis_window_bp=CIS_WINDOW_BP, min_cor=0.0,
-        release_id="comp-v1",
+        observed, completed, PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"), cis_window_bp=CIS_WINDOW_BP,
     )
     return observed, completed, panel
 

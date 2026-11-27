@@ -47,6 +47,8 @@ from test_indexed_subsets import (
     _index_group,
 )
 
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.dense.build import NormalisedAssociation
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.indexed_subsets import build_indexed_subset
@@ -183,12 +185,8 @@ def _complete_seed(
 ) -> None:
     """Complete a shared seed with the settings common to this module."""
     complete_dense_store(
-        source,
-        dst,
-        panel,
-        ancestry="EUR",
-        min_cor=0.0,
-        release_id="comp-v1",
+        source, dst, PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"),
     )
 
 

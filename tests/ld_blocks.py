@@ -11,6 +11,16 @@ from pathlib import Path
 import numpy as np
 
 
+def write_gzipped_matrix(path: Path, ld: np.ndarray) -> None:
+    """An LD matrix as a gzip of tab-separated rows, with no time in its header so
+    that a fixture panel's digest is the same on every run."""
+    buf = BytesIO()
+    with GzipFile(fileobj=buf, mode="wb", mtime=0) as gz:
+        for row in ld:
+            gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
+    path.write_bytes(buf.getvalue())
+
+
 def write_ld_block(
     block_dir: Path,
     block_name: str,
@@ -46,11 +56,7 @@ def write_ld_block(
     ld = A @ A.T + np.eye(n) * n * 0.1
 
     if write_matrix:
-        buf = BytesIO()
-        with GzipFile(fileobj=buf, mode="wb") as gz:
-            for row in ld:
-                gz.write(("\t".join(f"{v:.6f}" for v in row) + "\n").encode())
-        (block_dir / f"{block_name}.unphased.vcor1.gz").write_bytes(buf.getvalue())
+        write_gzipped_matrix(block_dir / f"{block_name}.unphased.vcor1.gz", ld)
 
     if write_npz:
         vals, vecs = np.linalg.eigh(ld)
@@ -60,3 +66,48 @@ def write_ld_block(
         np.savez_compressed(
             block_dir / f"{block_name}.ldeig", values=vals, vectors=vecs[:, :k]
         )
+
+
+def regenerated_panel(source: Path, destination: Path) -> Path:
+    """A copy of the panel at ``source`` in which one block's first variant has a
+    different frequency: the panel a regeneration from other samples leaves,
+    same layout and same blocks, other content. Asserts the copy differs."""
+    import shutil
+
+    shutil.copytree(source, destination)
+    table = sorted(destination.rglob("*.tsv"))[0]
+    lines = table.read_text().splitlines()
+    columns = lines[0].split("\t")
+    first = lines[1].split("\t")
+    before = first[columns.index("EAF")]
+    first[columns.index("EAF")] = "0.5" if before != "0.5" else "0.25"
+    lines[1] = "\t".join(first)
+    table.write_text("\n".join(lines) + "\n")
+    assert table.read_text() != (source / table.relative_to(destination)).read_text()
+    return destination
+
+
+def change_a_block(panel: Path) -> None:
+    """Rewrite one block's table in place, as a regeneration under a resumed run would."""
+    table = sorted(panel.rglob("*.tsv"))[0]
+    before = table.read_text()
+    table.write_text(before.replace("\t0.", "\t0.1", 1))
+    assert table.read_text() != before
+
+
+def add_a_table_with_no_matrix(panel: Path) -> Path:
+    """A copy of the first block's table beside it under another name, with no matrix:
+    not a loadable block, but one the EAF reader opens. Returns it."""
+    first = sorted(panel.rglob("*.tsv"))[0]
+    orphan = first.with_name("orphan.tsv")
+    orphan.write_bytes(first.read_bytes())
+    assert not orphan.with_suffix(".ldeig.npz").exists()
+    assert not orphan.with_suffix(".unphased.vcor1.gz").exists()
+    return orphan
+
+
+def assert_named_panel_record(record: dict, name: str) -> None:
+    """A completion's `provenance.completion` names the panel as the caller did."""
+    assert record["ld_panel_id"] == name
+    assert record["ld_panel_id_source"] == "caller"
+    assert len(record["ld_panel_digest"]) == 64

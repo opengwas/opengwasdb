@@ -20,6 +20,8 @@ from test_hybrid_completion import (
 )
 from test_se_residual_encoding import _residual_source_and_panel
 
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 
@@ -47,7 +49,8 @@ def dense_completed(tmp_path: Path) -> tuple[Path, np.ndarray, np.ndarray]:
     source, panel_path, _expected = _residual_source_and_panel(tmp_path)
     completed = tmp_path / "comp.opengwasdb"
     complete_dense_store(
-        source, completed, panel_path, ancestry="EUR", min_cor=0.0, release_id="comp"
+        source, completed, PanelSource(panel_path, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp"),
     )
     root = zarr.open_group(str(completed / "data.zarr"), mode="r+", zarr_format=3)
     n_variants = int(root["eaf_reference"].shape[0])
@@ -85,7 +88,7 @@ def hybrid_completed(tmp_path: Path) -> Path:
     )
     ld = _residual_ld_panel_with_crossover(tmp_path, crossover_alid, crossover_eaf)
     dst = tmp_path / "comp.opengwasdb"
-    complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
+    complete_hybrid_store(src, dst, PanelSource(ld), CompletionOptions(min_cor=0.0, thresh=0.9))
     return dst
 
 

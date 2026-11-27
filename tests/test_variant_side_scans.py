@@ -45,6 +45,8 @@ from test_hybrid_completion import (
 from test_ragged_completion import _RESULT_KEYS
 from test_ragged_residual_completion import RaggedResidualScenario
 
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
@@ -78,7 +80,7 @@ def hybrid_residual(tmp_path_factory: pytest.TempPathFactory) -> Path:
     src, crossover_alid, _crossover_se, crossover_eaf = _residual_hybrid_crossover_source(tmp)
     ld = _residual_ld_panel_with_crossover(tmp, crossover_alid, crossover_eaf)
     dst = tmp / "comp.opengwasdb"
-    complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
+    complete_hybrid_store(src, dst, PanelSource(ld), CompletionOptions(min_cor=0.0, thresh=0.9))
     return dst
 
 

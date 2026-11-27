@@ -19,6 +19,8 @@ import test_ragged_completion as trc
 from test_dense_vcf_build import HG19_POS_1, HG19_POS_3, _make_manifest, _make_vcf
 
 from opengwasdb.admission import NotAdmitted
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
@@ -150,9 +152,11 @@ def test_ragged_completion_logs_nothing_its_build_left_out(tmp_path, caplog) -> 
     caplog.clear()
     with caplog.at_level(logging.WARNING):
         trc.complete_ragged_store(
-            observed, tmp_path / "comp.opengwasdb",
-            trc._make_ld_panel(tmp_path, "1", 900_000, 1_300_000),
-            ancestry="EUR", cis_window_bp=500_000, min_cor=0.0, release_id="comp",
+            observed,
+            tmp_path / "comp.opengwasdb",
+            PanelSource(trc._make_ld_panel(tmp_path, "1", 900_000, 1_300_000), ancestry="EUR"),
+            CompletionOptions(min_cor=0.0, release_id="comp"),
+            cis_window_bp=500_000,
         )
     assert _completion_lines(caplog, "complete-ragged") == []
     assert [
@@ -181,7 +185,9 @@ def test_a_would_be_crossover_left_out_by_its_build_is_not_logged_again(
     caplog.clear()
     with caplog.at_level(logging.WARNING):
         thc.complete_hybrid_store(
-            src, tmp_path / "dst.opengwasdb", thc._make_ld_panel_with_crossover(tmp_path),
-            min_cor=0.0, thresh=0.9,
+            src,
+            tmp_path / "dst.opengwasdb",
+            PanelSource(thc._make_ld_panel_with_crossover(tmp_path)),
+            CompletionOptions(min_cor=0.0, thresh=0.9),
         )
     assert _completion_lines(caplog, "complete-hybrid") == []

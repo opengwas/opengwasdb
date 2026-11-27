@@ -619,7 +619,7 @@ def test_a_hybrid_drops_an_unmatched_row_only_where_nothing_folds_it(
         keep_unmatched=True,
     )
     gate = counting_gate(AnalysisRules("A"))
-    row = SimpleNamespace(source=None, se_divisor=1.0, trait_id="A", source_assembly="hg19")
+    row = SimpleNamespace(source=None, se_divisor=1.0, trait_id="A")
 
     dense, _, off_reference = hybrid_build._resolve_column_hybrid(
         table, row, gate, (["1:100:A:G"], ["1:100:A:G"]), folds
