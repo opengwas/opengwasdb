@@ -340,7 +340,8 @@ def test_extraction_leaves_out_a_site_lifted_onto_an_alt_contig(tmp_path, chain,
     reference = read_variant_reference(artifact)
     assert list(reference.alids) == [PRIMARY_LIFTED_ROW[4]]
     assert not any(ALT_TARGET_CONTIG in alid for alid in reference.source_lookup.values())
-    assert "1 source key(s) lifted onto an alt, random or unplaced contig" in caplog.text
+    assert "1 source key(s) lifted where no Store row can be" in caplog.text
+    assert "(lift_off_primary: 1)" in caplog.text
 
 
 def test_extraction_keeps_a_grch38_source_site_on_an_alt_contig(tmp_path):
@@ -399,7 +400,7 @@ def test_the_alt_target_chain_lifts_onto_an_alt_and_a_primary_contig(tmp_path):
         {"hg19": [alt[:4], primary[:4]]}, chain_file=chain, failure_threshold=0.0
     )
     assert placement.alid == {primary[:4]: primary[4]}
-    assert placement.off_primary == {alt[:4]}
+    assert placement.away == {alt[:4]: "lift_off_primary"}
 
 
 # --- A reference routes a lift's rows too --------------------------------------

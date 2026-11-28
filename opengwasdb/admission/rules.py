@@ -163,9 +163,10 @@ class Reason(StrEnum):
     HM_UNPLACED = HmUnplaced.reason
     #: A row of a source on the Store's assembly whose position is in an assembly
     #: gap, a run of two or more `N` where the assembly has no sequence (#410).
-    IN_ASSEMBLY_GAP = "in_assembly_gap"
-    #: The same, past its contig's last base (#410).
-    PAST_CONTIG_END = "past_contig_end"
+    IN_ASSEMBLY_GAP = assembly_gaps.IN_ASSEMBLY_GAP
+    #: The same, past its contig's last base (#410). A lifted source's row is dropped
+    #: under either reason where its lift lands there.
+    PAST_CONTIG_END = assembly_gaps.PAST_CONTIG_END
 
 
 #: The reasons whose rows are logged by source key, not only counted. A declared
@@ -422,9 +423,9 @@ def _judge_placement(codes: np.ndarray, rows: SourceRows, rules: AnalysisRules) 
             f"Analysis {rules.analysis_id}: its rules judge positions on {sequence.assembly}, "
             "and a batch of its rows carries none"
         )
-    position = np.asarray(rows.position, dtype=np.int64)
-    codes[sequence.in_gap(rows.chromosome, position)] = _CODE[Reason.IN_ASSEMBLY_GAP]
-    codes[sequence.past_end(rows.chromosome, position)] = _CODE[Reason.PAST_CONTIG_END]
+    found = sequence.reason_codes(rows.chromosome, np.asarray(rows.position, dtype=np.int64))
+    codes[found == assembly_gaps.IN_GAP_CODE] = _CODE[Reason.IN_ASSEMBLY_GAP]
+    codes[found == assembly_gaps.PAST_END_CODE] = _CODE[Reason.PAST_CONTIG_END]
 
 
 def _judge_info(

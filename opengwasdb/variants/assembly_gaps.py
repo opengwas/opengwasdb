@@ -35,8 +35,9 @@ from opengwasdb.store_reader.assembly import normalise_build
 from opengwasdb.store_reader.identity import normalise_chromosome
 
 __all__ = [
-    "GRCH38_TABLE", "GRCH38_TABLE_SHA256", "AssemblySequence", "derive", "grch38",
-    "sequence_of", "site_arrays",
+    "GRCH38_TABLE", "GRCH38_TABLE_SHA256", "IN_ASSEMBLY_GAP", "IN_GAP_CODE", "PAST_CONTIG_END",
+    "PAST_END_CODE", "REASONS", "AssemblySequence", "derive", "grch38", "sequence_of",
+    "site_arrays",
 ]
 
 #: The committed GRCh38 table: a contig row per primary contig, a gap row per run.
@@ -46,6 +47,14 @@ GRCH38_TABLE: Final = Path(__file__).with_name("grch38-assembly-gaps.tsv")
 GRCH38_TABLE_SHA256: Final = "ebff5d6c0987cc3b9bad3f8d08ac7411d7fec5d08e063ff92ef06c455194380c"
 #: The shortest run of `N` that is a gap; a single `N` is an ambiguity code.
 MIN_GAP: Final = 2
+#: The Admission reason of a row placed in an assembly gap (#410).
+IN_ASSEMBLY_GAP: Final = "in_assembly_gap"
+#: The Admission reason of a row placed past its contig's last base (#410).
+PAST_CONTIG_END: Final = "past_contig_end"
+#: `AssemblySequence.reason_codes`' codes, and the reason each names.
+IN_GAP_CODE: Final = 1
+PAST_END_CODE: Final = 2
+REASONS: Final[tuple[str | None, ...]] = (None, IN_ASSEMBLY_GAP, PAST_CONTIG_END)
 #: The primary contigs, as UCSC's FASTA names them.
 _PRIMARY: Final = frozenset({f"chr{n}" for n in (*range(1, 23), "X", "Y", "M")})
 
@@ -86,6 +95,23 @@ class AssemblySequence:
     def outside_at(self, chromosomes: Iterable[str], positions: Iterable[int]) -> np.ndarray:
         """`outside` of sites given one by one (`site_arrays`)."""
         return self.outside(*site_arrays(chromosomes, positions))
+
+    def reason_codes(self, chromosomes: np.ndarray, positions: np.ndarray) -> np.ndarray:
+        """Per row, why the assembly has no sequence at it, as an index into `REASONS`:
+        0 where it has, `IN_GAP_CODE` in a gap, `PAST_END_CODE` past the end. The one
+        owner of the precedence: a position past its contig's end is `past_contig_end`,
+        whatever the gap table says there."""
+        codes = np.zeros(len(positions), dtype=np.uint8)
+        codes[self.in_gap(chromosomes, positions)] = IN_GAP_CODE
+        codes[self.past_end(chromosomes, positions)] = PAST_END_CODE
+        return codes
+
+    def reasons_at(
+        self, chromosomes: Iterable[str], positions: Iterable[int]
+    ) -> list[str | None]:
+        """`reason_codes` of sites given one by one (`site_arrays`): per site,
+        `PAST_CONTIG_END`, `IN_ASSEMBLY_GAP`, or None where the assembly has sequence."""
+        return [REASONS[code] for code in self.reason_codes(*site_arrays(chromosomes, positions))]
 
     def past_end(self, chromosomes: np.ndarray, positions: np.ndarray) -> np.ndarray:
         """Per row: whether its position is beyond its contig's last base."""

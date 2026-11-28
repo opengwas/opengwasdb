@@ -694,6 +694,8 @@ def _nothing_placed(summary: admission.AdmissionSummary) -> str:
         admission.Reason.LIFT_UNMAPPED,
         admission.Reason.LIFT_AMBIGUOUS,
         admission.Reason.LIFT_OFF_PRIMARY,
+        admission.Reason.IN_ASSEMBLY_GAP,
+        admission.Reason.PAST_CONTIG_END,
         admission.Reason.LIFT_COLLISION,
     )
     per_analysis = "; ".join(
@@ -720,7 +722,8 @@ def _place_analysis(
     for one in placed:
         gate.unplaced(admission.Reason.LIFT_UNMAPPED, one.unmapped)
         gate.unplaced(admission.Reason.LIFT_AMBIGUOUS, one.ambiguous)
-        gate.unplaced(admission.Reason.LIFT_OFF_PRIMARY, one.off_primary)
+        for reason, keys in one.away.items():
+            gate.unplaced(admission.Reason(reason), keys)
         gate.unplaced(admission.Reason.LIFT_COLLISION, one.collided)
         if lifted:
             harvest.add_lifted(one.batch, one.source_alid)

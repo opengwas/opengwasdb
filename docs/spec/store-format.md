@@ -453,9 +453,10 @@ the Ragged Overflow before Pass 2 and nothing is folded, so the release is the o
 two-pass release restricted to the reference's ALIDs, with each listed ALID no source
 reaches stored empty. Names follow the two-pass rule (the first rsid of the sites placed
 on each ALID) when the reference names none, and are the reference's, as given, when it
-names some. A manifest of GRCh38 sources alone is routed by identity, as before, and a
-reference that names its rsids then reads no source. A source declared under any other
-assembly is refused, since neither identity nor the lift places it.
+names some. A manifest of GRCh38 sources alone is routed by identity, as before; Pass 1
+still reads its sources, to say which ALIDs one observed, the only rows with a
+`source_alid` (#261, below). A source declared under any other assembly is refused,
+since neither identity nor the lift places it.
 
 A GWAS Catalog row its harmoniser placed nowhere names no variant (#410). In the
 layout that keeps the study's alleles in the main columns, a row whose `hm_code`
@@ -483,10 +484,20 @@ names the FASTA's sha256. Every builder drops a row of a source on GRCh38
 placed in a gap or past its contig's end, logs it, per Analysis, as
 `in_assembly_gap` or `past_contig_end`, and holds its variant on no axis;
 `validate` fails a release that holds one (`variant_table.assembly_gap`, §20.0).
-A lifted row is judged after the lift, which #260 adds; until then
-`variant_table.assembly_gap` is the backstop. A lift can land in a gap: the
-hg19-to-GRCh38 chain aligns 1,146 bases of 9 of its 52,571 primary blocks
-there.
+A lifted row is judged after the lift, at the coordinate the lift placed it on,
+since Admission sees its source coordinate: a lift that lands in a gap or past its
+contig's end does not place the row, which is dropped, logged and counted, per
+Analysis, as `in_assembly_gap` or `past_contig_end`, as a lift onto an alt contig
+is counted `lift_off_primary`. The one judgement of a lift's result
+(`split_lifted`) is called by every path that lifts: `place_union`, the Hybrid
+fold's off-reference lift, the unmatched rows a single-pass `build-dense-vcf`
+lifts to say why, `extract-variant-reference` (which leaves such a site out of the
+artifact and logs how many), `build-ragged-ssf` and `build-ragged-besd`. A lift
+can land there: the hg19-to-GRCh38 chain aligns 2,372 bases, in 14 runs of 9 of
+its 52,571 primary-contig blocks, into gaps, and none past an end.
+`variant_table.assembly_gap` stays the backstop, for a release built before this
+and for a Variant Reference extracted before it, which may still route a lifted
+row into a gap.
 
 A build that lifts a source variant from another Reference Assembly MUST project
 the variant onto the release's assembly using the chain block's orientation: on a
@@ -571,9 +582,11 @@ reference warns and is recorded as unchecked rather than passing as verified.
 That release's `manifest.json` `provenance.lift` records the source Reference
 Assembly, the chain, the reference (or `null` when none was supplied) and the
 verified / other-variant / absent counts (issue #284, ADR 0062), `n_lifted`
-(the sites the chain mapped, those it placed off the primary assembly included) and
-`n_off_primary` (those sites, which §4 leaves out and the Admission record counts as
-`lift_off_primary`).
+(the sites the chain mapped), `n_off_primary` (those it placed off the primary
+assembly, which §4 leaves out and the Admission record counts as `lift_off_primary`)
+and `n_outside_sequence` (those it placed in a GRCh38 gap or past a contig's end,
+counted as `in_assembly_gap` or `past_contig_end`, #410): `n_lifted` is the sites it
+placed plus those two.
 
 A lift that lands two ESI entries on one canonical variant is ambiguous, and
 MUST be dropped, not resolved: a source of 9,000,000 rows cannot fail the way
@@ -612,9 +625,12 @@ are not one Analysis's duplicate rows: they are two variants (a lift collision),
 and every row of both is dropped and counted as `lift_collision`. A
 lifted Store records `provenance.lift` as `build-ragged-besd` does, with
 `n_unmapped`, `n_off_primary` (sites lifted onto an alt, random or unplaced
-contig, counted as `lift_off_primary` and left out) and `n_ambiguous` (Routing
-Keys) beside `n_lifted` (the sites the chain mapped, those off the primary assembly
-and the ambiguous ones included), and `reference: null`: the lift is not checked against a Variant Reference. A Store
+contig, counted as `lift_off_primary` and left out), `n_outside_sequence` (sites
+lifted into a GRCh38 gap or past a contig's end, counted as `in_assembly_gap` or
+`past_contig_end` and left out) and `n_ambiguous` (Routing Keys) beside `n_lifted`
+(the sites the chain mapped: those it placed, the ambiguous and collided ones
+among them, plus `n_off_primary` and `n_outside_sequence`; `n_unmapped` is apart),
+and `reference: null`: the lift is not checked against a Variant Reference. A Store
 whose sources are all on GRCh38 records no `provenance.lift`. A build with any
 non-GRCh38 source holds every Analysis's admitted rows in memory until the lift
 has placed them; a GRCh38-only build reads one Analysis at a time. A lift that
@@ -890,8 +906,28 @@ chromosome's ranges from another's rows, or from none.
 for a lifted row the pre-liftover ALID, for a row its source already placed on the
 release's assembly its own ALID. A row two source variants collided onto (§4 above,
 #85) has none, and so has a row Reference Completion added from the panel, which no
-source observed. Three plain `.npy` files, memory-mappable and read with numpy
-alone, hold it:
+source observed. **Only a row some source observed has one (#261).** A build MUST NOT
+write a `source_alid` for a row no source observed: a single-pass build routed by a
+Variant Reference with no source keys (a plain ALID list, a Store Variant Table) holds
+every ALID the reference lists, and writes `.` for each that no source supplied, as the
+two-pass `--reference-panel` build writes for a panel row no Analysis observed, so the
+two write the same table. To know which, it reads its sources (Pass 1) even when the
+reference names its rsIDs; an observed row's `source_alid` is the own coordinate of the
+source sites that reached it by the routing Pass 2 uses (matched by Routing Key, or
+lifted, #260), never the reference's identity. An extraction artifact's source keys
+are coordinates its sources supplied, and are its rows' `source_alid` as before.
+`build-dense-vcf` and `build-hybrid` refuse a map they are about to write that names a
+`source_alid` no source supplied (`require_observed_provenance`). The check is kept apart
+from what it checks: it reads the coordinates recorded from the sites read (Pass 1's
+union, an artifact's source keys, the Hybrid fold's resolved keys:
+`SuppliedCoordinates`), never the routing's record of what was observed, so a fault in
+that record is refused too; `build-hybrid` checks the map after the fold merges in the
+off-reference origins, the one it writes; and a plain reference whose routing records
+no observation is refused outright. There is no `validate` rule: a release cannot tell an unobserved row from an observed one whose every
+association Admission dropped, which also holds none. A release built before #261 from
+a plain reference (OGS-00005's 8 Oct 2026 rebuild: 600,977 Dense Component rows) names
+such rows by their own ALID. Three plain `.npy` files, memory-mappable and read with
+numpy alone, hold it:
 
 | file | dtype | length | holds |
 |---|---|---|---|

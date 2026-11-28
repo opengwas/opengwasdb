@@ -22,6 +22,10 @@ from opengwasdb.variants.routing.extract import (
 from opengwasdb.variants.routing.keys import SourceKey
 from opengwasdb.variants.routing.lift import SitePlacement, place_sites
 from opengwasdb.variants.routing.names import RoutedNames, union_names
+from opengwasdb.variants.routing.provenance import (
+    SuppliedCoordinates,
+    require_observed_provenance,
+)
 from opengwasdb.variants.routing.route import (
     FromReference,
     LiftedUnion,
@@ -53,6 +57,7 @@ __all__ = [
     "RoutedNames",
     "SitePlacement",
     "SourceKey",
+    "SuppliedCoordinates",
     "UnionOptions",
     "Unmatched",
     "VariantReferenceExtraction",
@@ -60,6 +65,7 @@ __all__ = [
     "collapse_duplicates",
     "extract_variant_reference",
     "place_sites",
+    "require_observed_provenance",
     "route_variants",
     "union_names",
 ]

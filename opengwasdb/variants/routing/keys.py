@@ -42,6 +42,14 @@ def routing_key(site: SourceKey) -> str:
     return f"{chrom}:{pos}:{identity_allele(ref)}:{identity_allele(alt)}"
 
 
+def folded_site(site: SourceKey) -> SourceKey:
+    """``site`` with its alleles spelt as `routing_key` spells them: the tuple a lookup
+    keyed by identity alleles (a plain reference's) holds it under, so a dict lookup
+    matches a site exactly when Pass 2's Routing Key does."""
+    chrom, pos, ref, alt = site
+    return chrom, int(pos), identity_allele(ref), identity_allele(alt)
+
+
 def contig_label(label: str) -> str:
     """``label`` as the contig it names, or ``label`` itself where it names none a
     Store knows (an alt or unplaced contig of a source's own assembly)."""

@@ -41,7 +41,7 @@ from opengwasdb.layouts.hybrid.unknown_keys import (
 from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.variants.routing import SitePlacement, place_sites
 from opengwasdb.variants.routing.keys import raw_site_key, split_raw_site_key
-from opengwasdb.variants.routing.lift import LiftCollisions
+from opengwasdb.variants.routing.lift import NO_LIFTED_AWAY, LiftCollisions, LiftedAway
 
 __all__ = [
     "HG19",
@@ -146,9 +146,11 @@ class ResolvedKeys:
     keys: np.ndarray
     alids: list[str]
     origins: list[str]
-    off_primary: frozenset[str] = frozenset()
+    #: The raw keys a lift placed where no Store row can be, each with the Admission
+    #: reason its rows are counted under (#376, #410).
+    lifted_away: LiftedAway = NO_LIFTED_AWAY
     #: The sites a lift collision dropped (#325), by the ALID they reached: counted
-    #: as `lift_collision`, like `off_primary`'s as `lift_off_primary`.
+    #: as `lift_collision`.
     lift_collisions: LiftCollisions = field(default_factory=dict)
 
 
@@ -382,16 +384,16 @@ def _lift_hg19(
     liftover_failure_threshold: float,
     chain_file: str | Path | None,
     lifted_only: np.ndarray,
-) -> tuple[frozenset[str], LiftCollisions]:
+) -> tuple[LiftedAway, LiftCollisions]:
     """Fill the hg19-declared keys' ALIDs in place, dropping failed lifts.
 
     ``lifted_only`` marks the keys no GRCh38 source declares too: only those are
     refused for a reverse-strand lift (`_require_oriented`), since the rest are dropped
     by the both-assemblies rule and publish nothing.
 
-    Returns the raw keys the lift placed off the primary assembly (#376) and those
-    it dropped as a collision (#325), which are dropped like a failed lift but
-    counted apart."""
+    Returns the raw keys the lift placed where no Store row can be, with their
+    reasons (#376, #410), and those it dropped as a collision (#325), which are
+    dropped like a failed lift but counted apart."""
     packed_positions = np.flatnonzero(is_hg19 & ~hashed)
     hashed_positions = np.flatnonzero(is_hg19 & hashed)
     tuples: list[tuple[str, int, str, str]] = []
@@ -402,7 +404,7 @@ def _lift_hg19(
         split_raw_site_key(raw) for raw in _hashed_raw_list(values[hashed_positions], merged)
     )
     if not tuples:
-        return frozenset(), {}
+        return NO_LIFTED_AWAY, {}
     placement = place_sites(
         {"hg19": tuples}, chain_file=chain_file, failure_threshold=liftover_failure_threshold
     )
@@ -413,7 +415,8 @@ def _lift_hg19(
     )
     for position, tup in zip(lift_positions.tolist(), tuples, strict=True):
         alids[position] = placement.alid.get(tup)
-    return frozenset(raw_site_key(site) for site in placement.off_primary), placement.collisions
+    away = {raw_site_key(site): reason for site, reason in placement.away.items()}
+    return away, placement.collisions
 
 
 class UnorientedOffReferenceLiftError(ValueError):
@@ -474,10 +477,10 @@ def resolve_keys(
     alids = _hg38_alids(values, bits, hashed, merged)
     is_hg19 = (bits & HG19) != 0
     both = bits == (HG19 | HG38)
-    off_primary: frozenset[str] = frozenset()
+    lifted_away: LiftedAway = NO_LIFTED_AWAY
     lift_collisions: LiftCollisions = {}
     if bool(is_hg19.any()):
-        off_primary, lift_collisions = _lift_hg19(
+        lifted_away, lift_collisions = _lift_hg19(
             values,
             is_hg19,
             hashed,
@@ -490,14 +493,14 @@ def resolve_keys(
     for position in np.flatnonzero(both).tolist():
         alids[position] = None  # declared under both assemblies: two loci, placed nowhere
     origins = _origins(values, alids, is_hg19, hashed, merged)
-    return _drop_unresolved(values, alids, origins, off_primary, lift_collisions)
+    return _drop_unresolved(values, alids, origins, lifted_away, lift_collisions)
 
 
 def _drop_unresolved(
     values: np.ndarray,
     alids: list[str | None],
     origins: list[str | None],
-    off_primary: frozenset[str] = frozenset(),
+    lifted_away: LiftedAway = NO_LIFTED_AWAY,
     lift_collisions: LiftCollisions | None = None,
 ) -> ResolvedKeys:
     """Keep the keys that resolved; ``alids``/``origins`` are reused, not copied,
@@ -508,7 +511,7 @@ def _drop_unresolved(
             keys=values,
             alids=cast(list[str], alids),
             origins=cast(list[str], origins),
-            off_primary=off_primary,
+            lifted_away=lifted_away,
             lift_collisions=lift_collisions or {},
         )
     kept = np.flatnonzero(resolved)
@@ -525,6 +528,6 @@ def _drop_unresolved(
         keys=values[kept],
         alids=resolved_alids,
         origins=resolved_origins,
-        off_primary=off_primary,
+        lifted_away=lifted_away,
         lift_collisions=lift_collisions or {},
     )
