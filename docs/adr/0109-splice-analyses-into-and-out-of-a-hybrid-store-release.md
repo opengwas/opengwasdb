@@ -650,6 +650,7 @@ Every splice appends one entry to `provenance.lineage` (spec §2b) in both manif
 first splice of a release starts the list. An entry records:
 
 - `source_release_id`, and the `increment_release_id` (or `null` for a drop-only splice);
+- `source_fingerprint`: the content fingerprint of SOURCE as splice read it (below);
 - `added` and `dropped`, as `analysis_id` lists;
 - `n_analyses_before` and `n_analyses_after`;
 - `source_record`, or `null`: an object of key → value pairs, each an attested fact splice
@@ -676,13 +677,50 @@ whereas `provenance` is carried as an opaque dict by every writer. A new rule,
   `n_analyses_before − |dropped| + |added|`;
 - every added id must be in `analyses.tsv`, and no dropped id that was not re-added.
 
-**Concurrency: the parent is checked at publication.** `lineage[-1].source_release_id` is the
-release this splice read.
+**Concurrency: the parent is checked at publication, by content as well as by `release_id`.**
+`lineage[-1]` names the release this splice read, in two ways:
 
-- **The engine's half** is that field, which `--plan` also prints.
-- **The registry's half** (stores#546) is that publication refuses when the live release at
-  the published path is no longer that parent, for example when another splice or a rebuild
-  was published in between. The operator then re-runs the splice against the new live
+- by `source_release_id`;
+- by `source_fingerprint`, a digest of SOURCE's content.
+
+The `release_id` alone does not identify the parent. stores ADR 0044's in-place post
+additions change a published Store and keep its `release_id`: OGS-00011's Rho and Clumps were
+added in place under `1459d7e2-48de-486a-ad7a-e6dc8d26f935`. A splice that read the Store
+before such an addition would otherwise pass a `release_id` check against the Store after it.
+
+**`source_fingerprint`** is `{"algorithm": "opengwasdb-release-fingerprint-v1", "sha256": …,
+"n_files": …}`. It is computed by one new owner, `opengwasdb.store.fingerprint.release_fingerprint`
+(#521), and taken at the start of the splice, before anything is read. The `sha256` covers
+both of these:
+
+1. **A sorted listing of every regular file under the release**, with its relative path and
+   its byte size. This includes the nested Dense Component, so any file added, removed or
+   resized is seen.
+2. **The sha256 of the content of every metadata file.** That is both `manifest.json`,
+   `analyses.tsv`, every `zarr.json` under both `data.zarr` trees, and `dense/index.sqlite`.
+
+**Every ADR 0044 addition changes one of these.** Rho, Clumps and an Indexed Variant Subset
+each add groups and `zarr.json` files. Clumps also change the manifest's `clumps` entry and
+`analyses.tsv`, and a recount changes `analyses.tsv`.
+
+**What it does not see:** a rewrite that keeps every file's path and size and touches no
+metadata file, such as a shard rewritten in place at the same size. The registry's check that
+the published directory is unchanged since the splice started (stores ADR 0045 §6) covers that
+case.
+
+It is cheap and deterministic. OGS-00011 has 30,116 files, and its metadata files total
+364 MB, of which `dense/index.sqlite` is 359 MB (measured, 28 Nov 2026). It does not hash
+the planes: that is `ogquery.digests.release_digests`, the proof's whole-answer digest,
+which costs about 35 min (§10).
+
+- **The engine's half:**
+  - `lineage[-1]` carries both fields, which `--plan` and the splice's report also print;
+  - `opengwasdb info --format json --fingerprint` prints the live release's fingerprint, so
+    the registry can compute it without importing the engine (stores ADR 0023). This is #521.
+- **The registry's half** (stores#546, stores ADR 0045 §6): publication refuses unless the
+  live release's `release_id` equals `source_release_id`, **and** its fingerprint equals
+  `source_fingerprint`. Another splice, a rebuild or an in-place addition published in
+  between fails one of the two, and the operator re-runs the splice against the new live
   release.
 
 ADR 0043's lock serialises the commit of a staging directory, not the choice of parent, so it
@@ -823,16 +861,37 @@ superseded when the Store is rebuilt at 0.4.0 (ruling 1).
    - every rsID and `source_alid` change, by variant, and the SOURCE blanks §7 kept;
    - each added Analysis's `eaf` exception share and EAF-orientation verdict;
    - the proof's question counts;
+   - `source_fingerprint` (§9);
+   - **the `validate` verdict** of the staged release, as `validate --format json` gives it
+     (status, checks, warnings, errors), run with the splice's `--ld-store` pairs. The
+     registry records it as the release's validation and runs no second `validate` (§9).
+     This is #521;
+   - **the post-step counts** of the new release: `n_associations`, `n_top_hits`, and, where
+     it has Clumps, `n_loci_5e8` and `n_unclumped_5e8`. This is #521;
    - `elapsed_s` and the phase timings.
 4. **`--source-record`**: the attestation the registry writes from its step records, for a
    SOURCE that predates recording these facts, and that the owner accepts. It holds the keys of
    §9's `source_record`. For OGS-00011 they come from `records/build.json`,
    `work/analyses.tsv`, `records/complete.json`, `records/completion-indexed-subset-hm3.json`
    and `validation.yaml`. Without it, splice refuses any SOURCE that recorded no digest.
-5. **Manifest fields** the registry can read: `release_id`, `created_at`,
-   `provenance.lineage[]` (§9), and `analyses.tsv`. The registry checks ruling 6's
-   GCST90132314 by name against `added` and `analyses.tsv`. It also refuses publication when
-   the live release is not `lineage[-1].source_release_id` (§9).
+5. **`info --format json` prints `provenance` and `n_analyses`** (#521). Today it prints
+   neither (`cli/main.py:479`), and stores ADR 0023 lets the registry read a Store only
+   through `info`. With `--fingerprint` it also prints the release's fingerprint (§9). The
+   registry then reads these through `info`:
+   - `release_id` and `created_at`;
+   - `provenance.lineage[]`, whose last entry carries `source_release_id` and
+     `source_fingerprint`;
+   - `n_analyses`.
+
+   It checks ruling 6's GCST90132314 by name against `added` and `analyses.tsv`. It refuses
+   publication unless the live release matches both `source_release_id` and
+   `source_fingerprint` (§9).
+6. **A command that prints an LD panel's digest** (#522, after #327 is on main). `opengwasdb
+   ld-panel-digest PATH --ancestry ANCESTRY` prints the digest that #327's completion records
+   as `provenance.completion.ld_panel_digest`, from the same function, so the two always
+   agree. The registry puts it in `--source-record` as `ld_panel_digest` (§3). That is an
+   attestation that the panel at the recorded path is the one completion read, which the
+   owner accepts. The command never makes it a build-time record.
 
 ## Considered options
 

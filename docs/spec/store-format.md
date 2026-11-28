@@ -292,6 +292,7 @@ release that was never spliced has no `lineage` key.
 | Key of an entry | Meaning |
 |---|---|
 | `source_release_id` | the release this splice read |
+| `source_fingerprint` | that release's content as the splice read it: `algorithm` (`opengwasdb-release-fingerprint-v1`), `sha256` over every file's relative path and size and the content of every `manifest.json`, `analyses.tsv`, `zarr.json` and `index.sqlite`, and `n_files` (ADR 0109 §9) |
 | `increment_release_id` | the Increment whose Analyses it added, or `null` when it only dropped |
 | `added`, `dropped` | `analysis_id` lists; an id in both was replaced |
 | `n_analyses_before`, `n_analyses_after` | Analysis counts of the source and of this release |
@@ -305,8 +306,9 @@ through the Store Reader's manifest model, which drops top-level keys it does no
 release (ADR 0002, ADR 0109 §2): no entry records an index, and an Analysis is followed
 across releases by `analysis_id`, and an index is valid only with the `release_id` it came
 from. `lineage` records only how a release was made, so a release carrying it stays at
-0.3.0 (§21.1, *A record of how a release was made*; ADR 0109 §9). `source_release_id` of the last entry is
-the release a publication must still find live (ADR 0109 §9). The rule
+0.3.0 (§21.1, *A record of how a release was made*; ADR 0109 §9). The last entry's `source_release_id` and
+`source_fingerprint` together name the release a publication must still find live: the
+`release_id` alone does not, since an in-place post addition keeps it (ADR 0109 §9). The rule
 `manifest.lineage`, added with #521, holds the last entry to the release:
 `n_analyses_after` equals `n_analyses_before − |dropped| + |added|` and the row count of
 `analyses.tsv`, every added id is a row, and no dropped id that was not re-added is.
