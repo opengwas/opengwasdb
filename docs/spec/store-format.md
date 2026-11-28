@@ -295,7 +295,7 @@ release that was never spliced has no `lineage` key.
 | `increment_release_id` | the Increment whose Analyses it added, or `null` when it only dropped |
 | `added`, `dropped` | `analysis_id` lists; an id in both was replaced |
 | `n_analyses_before`, `n_analyses_after` | Analysis counts of the source and of this release |
-| `source_record` | the facts the source's manifests lack that the registry supplied (rsID policy, source assembly, Variant Reference and LD panel digests; ADR 0109 §3), or `null` |
+| `source_record` | `null`, or an object of key → value pairs: the facts the source did not record, attested by the registry and accepted by the owner (ADR 0109 §3). Keys: `rsid_conflict_policy`, `source_assembly`, `variant_reference_sha256`, `reference_panel_sha256` (`null` when the build took none), `ld_panel_digest`, `indexed_subsets` (name → `variant_list_path`, `overflow_only`), `attested_by`, `evidence` (the records each value was read from) |
 | `reason` | the operator's free text, e.g. a Release Erratum's reference, or `null` |
 | `at`, `tool`, `opengwasdb_version`, `opengwasdb_git_hash` | when and by what the splice ran |
 
@@ -3734,7 +3734,10 @@ which release, by which tool, with which recorded deviations. It is a compatible
 that **does not move `format_version`**. A package that does not know the block reads
 every value it knew, correctly, and carries or ignores the block as opaque `provenance`.
 Its `validate` judges the release as it judges any other, since no rule it has reads the
-block and the closed envelope (§1) judges only top-level entries. Its completion treats
+block and the closed envelope (§1) judges only top-level entries. The package that writes
+the block may judge it: `converted_from` has its own rule and lowers the rules it names to
+warnings (`validation/rules/release.py:545–552`), so an older package's `validate` can be
+stricter on such a release, never laxer. Its completion treats
 the release as it would without the block. Moving the remainder would buy nothing a reader
 lacks. It would make every older package's `validate` fail the release wherever a
 component is tied to one version: the Clumps' rule, for one, fails a clumped 0.3.1 release. There are two instances: `provenance.converted_from` (issue #492, ADR 0105),

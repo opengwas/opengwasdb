@@ -1,10 +1,18 @@
 # Withhold an rsid its sources dispute, and read compound ids as their rs identifier
 
 > **Superseded in part, for a splice only, by [ADR 0109](0109-splice-analyses-into-and-out-of-a-hybrid-store-release.md) §7**
-> (issue #520). A splice has each release's final names, not routing keys, so it
-> compares names per variant. It withholds a name whenever the two releases differ,
-> including two allele orders that each agree internally, which this ADR keeps. It never
-> fills a blank, which may be a withheld dispute. Every build is unchanged.
+> (issue #520). A splice has each release's final names, not routing keys, plus the
+> Increment build's record of every key it found disputed. It compares names per
+> variant, by ALID:
+> - Against an Increment blank that is not a recorded dispute, the source release's name
+>   is **kept**, so an Increment's sparse names never strip a published release's.
+> - Against an Increment blank that the Increment's build recorded as a dispute, the
+>   name is withheld.
+> - Two different names are withheld under `drop` and refused under `refuse`. That
+>   includes two allele orders that each agree internally, which this ADR keeps.
+> - A source-release blank is never filled, because it may be a withheld dispute.
+>
+> Every build is unchanged.
 
 > **Clarified 5 November 2026** (issue
 > [#379](https://github.com/opengwas/opengwasdb/issues/379), the owner's ruling
