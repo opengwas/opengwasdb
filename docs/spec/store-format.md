@@ -295,6 +295,7 @@ release that was never spliced has no `lineage` key.
 | `increment_release_id` | the Increment whose Analyses it added, or `null` when it only dropped |
 | `added`, `dropped` | `analysis_id` lists; an id in both was replaced |
 | `n_analyses_before`, `n_analyses_after` | Analysis counts of the source and of this release |
+| `source_record` | the facts the source's manifests lack that the registry supplied (rsID policy, source assembly, Variant Reference and LD panel digests; ADR 0109 §3), or `null` |
 | `reason` | the operator's free text, e.g. a Release Erratum's reference, or `null` |
 | `at`, `tool`, `opengwasdb_version`, `opengwasdb_git_hash` | when and by what the splice ran |
 
@@ -302,7 +303,11 @@ release that was never spliced has no `lineage` key.
 through the Store Reader's manifest model, which drops top-level keys it does not know, and
 `provenance` is carried whole (ADR 0109 §9). `analysis_index` and `variant_index` are per
 release (ADR 0002, ADR 0109 §2): no entry records an index, and an Analysis is followed
-across releases by `analysis_id`. The field moves no `format_version` (§21.0). The rule
+across releases by `analysis_id`, and an index is valid only with the `release_id` it came
+from. Whether a release carrying `lineage` moves `format_version` is open: §21.1 classes a
+new `provenance` block as a remainder move, which would make it 0.3.1, and ADR 0109 §9
+records the evidence for the decision #521 needs. `source_release_id` of the last entry is
+the release a publication must still find live (ADR 0109 §9). The rule
 `manifest.lineage`, added with #521, holds the last entry to the release:
 `n_analyses_after` equals `n_analyses_before − |dropped| + |added|` and the row count of
 `analyses.tsv`, every added id is a row, and no dropped id that was not re-added is.

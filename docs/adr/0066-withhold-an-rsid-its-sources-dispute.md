@@ -1,5 +1,11 @@
 # Withhold an rsid its sources dispute, and read compound ids as their rs identifier
 
+> **Superseded in part, for a splice only, by [ADR 0109](0109-splice-analyses-into-and-out-of-a-hybrid-store-release.md) §7**
+> (issue #520). A splice has each release's final names, not routing keys, so it
+> compares names per variant. It withholds a name whenever the two releases differ,
+> including two allele orders that each agree internally, which this ADR keeps. It never
+> fills a blank, which may be a withheld dispute. Every build is unchanged.
+
 > **Clarified 5 November 2026** (issue
 > [#379](https://github.com/opengwas/opengwasdb/issues/379), the owner's ruling
 > "compare everywhere"). The rule below holds in every harvest, not only in a
