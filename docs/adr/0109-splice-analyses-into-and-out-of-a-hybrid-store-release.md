@@ -25,14 +25,18 @@ Where each decision comes from:
   - **Removal on real data** is proven by a staged, never-published drop from OGS-00011
     (§8c). OGS-00011's first increment is add-only.
 - **This ADR**, marked *(this ADR)*.
-- **One question is open: the `format_version` of a release that carries
-  `provenance.lineage`** (§9). It is reported on #520 and is the owner's to decide before
-  #521 merges.
+- **The orchestrator's ruling on F1** (28 Nov 2026, in the orchestration of #508), marked
+  *(ruling, F1)*: a release carrying `provenance.lineage` stays at 0.3.0 (§9).
 
 What this ADR changes in other documents:
 
 - Spec §2b (new): `provenance.lineage`, the record a spliced release carries of the releases
   it derives from.
+- **Spec §21.1 is amended** (and §21.0 reconciled with it): a `provenance` block that only
+  records how a release was made is a compatible change that does not move
+  `format_version`. `converted_from` and `lineage` are its two instances (§9). This narrows
+  [ADR 0038](0038-store-format-versioning-and-migration-policy.md) §1's "a new `provenance`
+  block", and ADR 0038 carries a note saying so.
 - CONTEXT.md: two new terms, **Splice** and **Increment**.
 - [ADR 0066](0066-withhold-an-rsid-its-sources-dispute.md): §7 supersedes, for a splice
   only, its rule that two allele orders which each agree internally keep the first name.
@@ -193,8 +197,8 @@ def plan_splice(source, *, add=None, drop=(), source_record=None) -> SplicePlan:
   - `require_valid_staged_release`, a full `validate`.
 
   It does not reuse rewrite's proof, which requires every answer unchanged. It has its own
-  (§8). It does not reuse `_refuse_version` either: splice accepts the 0.3 series it writes
-  (§9, §11).
+  (§8). It does not reuse `_refuse_version` either: splice accepts exactly 0.3.0, the
+  version it writes (§9, §11).
 - **Never in place.** The previous release stays where it is. Moving it to
   `replaced/<UTC>/` and putting the new one at the published path is the registry's job
   (ruling 2, stores#546).
@@ -256,7 +260,7 @@ SOURCE records a different value, and copies every key it used into the lineage 
 | Store Encoding: `z` kind and scale, `se` kind | `manifest.encoding` | the same | equality. The Increment must carry `eaf` exactly (`float32`, or `absent` when no added Analysis has EAF), so splice quantises each new cell once, under the release's plan (§5) |
 | Reference assembly, chain file, Association Coverage | `reference_assembly`, `provenance.chain_file`, `association_coverage` | the same | equality |
 | Source assembly | not recorded. For OGS-00011, the registry supplies `build.json` argv's `--source-assembly hg38` | recorded (#522) | one assembly for both. A splice that would mix assemblies is refused, because a union build drops a key declared in both (`key_table.py:448`) and a splice cannot find such keys afterwards |
-| `format_version` | `format_version` | the same | both in the 0.3 series splice writes (§9) |
+| `format_version` | `format_version` | the same | both 0.3.0, the version splice writes (§9) |
 | rsID conflict policy (ADR 0066) | not recorded, so it cannot be authenticated from SOURCE. For OGS-00011, the registry supplies it from `build.json` argv (`--on-rsid-conflict drop`) and `validation.yaml` (`rsid_conflicts.policy: drop`) | recorded in provenance. From #522 on, every `build-hybrid` records it, not only an Increment's | equality |
 | EAF orientation | `provenance.eaf_orientation` (`method`, `min_overlap`, `min_variance`, `allow_unverified`) | the same settings | equality of the settings. Each added Analysis is verified against SOURCE's EAF Baselines (D1, below) |
 | Ancestry filter | each row's `assigned_ancestry` | the same | each added Analysis is imputed exactly when its `assigned_ancestry` matches the panel's, by the rule a union build applies to all rows. #522 passes `impute_analysis_ids` computed over SOURCE's and the Increment's rows together, so the no-ancestry fallback (`ancestry_filter.py:82`) never fires for an Increment whose own rows carry no ancestry. Splice refuses an added Analysis whose imputed cells disagree with that rule |
@@ -532,32 +536,32 @@ published in between. The operator then re-runs the splice against the new live 
 ADR 0043's lock serialises the commit of a staging directory, not the choice of parent, so it
 cannot prevent a stale-parent publication alone.
 
-**Not decided here: which `format_version` a release carrying `lineage` is stamped.** Spec
-§21.1 classes "a new `provenance` block" as a compatible change that moves the remainder. That
-would make a spliced release 0.3.1, under the lowest-version rule (spec §21.3). The evidence,
-reported to the owner on #520:
+**A release carrying `lineage` stays at 0.3.0, and spec §21.1 is amended to say why**
+*(ruling, F1: the orchestrator, 28 Nov 2026, in the orchestration of #508)*. Before the
+amendment, §21.1 classed "a new `provenance` block" as a compatible change that moves the
+remainder, which would have made a spliced release 0.3.1. The ruling takes the other branch,
+on this evidence:
 
-- **Readers accept 0.3.1.** ogquery 0.5.0 knows the 0.3 series to remainder 0, and reads a
-  0.3.1 release with a warning (`ogquery/format.py:337` `check_format_version`). So does every
-  0.3 reader.
-- **An older package's `validate` fails one.** Every package before #521 fails a spliced
-  OGS-00011 on `clumps.declared`, because Clumps are allowed only on 0.3.0
-  (`opengwasdb/clumps.py:84` `CLUMPS_FORMAT_VERSIONS`,
-  `validation/rules/clumps.py:204`). The same packages refuse to clump it (`clumps.py:219`),
-  to build its `by_variant` (`layouts/ragged/by_variant.py:698`) and to complete it
-  (`store/open.py:247`), and their `manifest.format_stamp` warns.
-- **No move contradicts §21.1's text, but has precedent.** `provenance.converted_from` (#492,
-  ADR 0105) is a new provenance block on 0.3.0, written with no move and no exception
-  recorded. ADR 0106 §9 kept the Clumps at 0.3.0 by asking whether a 0.3.0-only package
-  misreads, mis-validates or mis-completes the release. Asked of `lineage`, the answer is no:
-  it is opaque provenance, no rule of such a package judges it, and completion refuses a
-  completed source anyway.
+- **No 0.3.0 package misreads `lineage`.** This is ADR 0106 §9's test. The field is opaque
+  `provenance`, no rule of such a package judges it, and its completion refuses a completed
+  source anyway.
+- **Moving would fail releases for metadata no reader interprets.** Every package before
+  #521 would fail a spliced OGS-00011 on `clumps.declared`, because Clumps are allowed only on
+  0.3.0 (`opengwasdb/clumps.py:84` `CLUMPS_FORMAT_VERSIONS`,
+  `validation/rules/clumps.py:204`). The same packages would refuse to clump it
+  (`clumps.py:219`), to build its `by_variant` (`layouts/ragged/by_variant.py:698`) and to
+  complete it (`store/open.py:247`). A query reader would only warn: ogquery 0.5.0 reads a
+  0.3.1 release with a warning (`ogquery/format.py:337` `check_format_version`).
+- **Precedent.** `provenance.converted_from` (#492, ADR 0105) is a provenance block added at
+  0.3.0 with no move, and until now with no rule in §21.1 to say why.
 
-Moving to 0.3.1 also means adding a `carries_lineage` input to `format_version_for`, adding
-0.3.1 to `WRITTEN_FORMAT_VERSIONS`, `SUPPORTED_FORMAT_VERSIONS` and `CLUMPS_FORMAT_VERSIONS`,
-and a `docs/store-format-compatibility.md` row. Not moving means recording an exception to
-§21.1, beside a reconciliation of `converted_from`'s. Either is #521's to implement once the
-owner decides.
+So §21.1 now names a class, *a record of how a release was made*: a `provenance` block that no
+reader needs to decode an array or answer a query, and that only says how the release came to
+be. Such a block is compatible and moves nothing. `converted_from` and `lineage` are its two
+instances. A block that a reader must interpret still moves the remainder. §21.0 says
+explicitly that it is a different rule: §21.0 edits values already in published Stores, while
+this class appears only in releases written from then on. `format_version_for`,
+`WRITTEN_FORMAT_VERSIONS` and `docs/store-format-compatibility.md` are unchanged.
 
 **The Validation Record and `build_elapsed_s` are the registry's** (stores ADR 0004, amended
 by stores#546). The engine's position, for that ADR:
@@ -712,11 +716,18 @@ superseded when the Store is rebuilt at 0.4.0 (ruling 1).
   before them is spliced only with a `--source-record` from the registry.
 - ogquery gains a projected form of its question set and the `release_id` guard (§2, §8), a
   cross-repository change that #521 needs before it can publish.
-- Which `format_version` a spliced release carries is open (§9). If it moves to 0.3.1,
-  `docs/store-format-compatibility.md` gains a row, and packages before #521 fail a spliced
-  release in `validate`. If it does not move, §21.1 gains a recorded exception.
+- A spliced release is 0.3.0 (§9), read and validated by every 0.3.0 package, which ignores
+  `provenance.lineage`. `docs/store-format-compatibility.md` gains no row. Spec §21.1 now
+  states the class of provenance block that moves nothing, so a later one is judged by that
+  rule and is not a silent exception.
 - The Increment's `eaf` is `float32`, which `--increment-of` must be able to force. Today
   the plan is measured (`build.py:2066` `_plan_joint_encoding`). A resumed build already
   loads a frozen plan instead (`build.py:2686` `_recorded_plan`), and that is the seam #522
   uses.
-- #522 depends on #327 being on main.
+- **#522 depends on #327's `ld_panel_digest` reaching main.** #327 is on
+  `orch/367-silent-errors`. Until it lands, the Increment's completion panel can be pinned
+  only by what main records, and main records no panel identity: `ld_panel_id` is a constant
+  label (`layouts/dense/complete.py:137`). So #522 refuses, by name, an Increment whose
+  completion records no panel identity. It never falls back to `ld_panel_id`, or to
+  matching ALIDs or panel EAF. SOURCE's panel identity can come from `--source-record`
+  (§3). The Increment's cannot, because the Increment is the release being checked.
