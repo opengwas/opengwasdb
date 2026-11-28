@@ -204,10 +204,12 @@ class Gate:
         """`source_rows` for one of Variant Routing's batches: its ``admit=``.
 
         An Analysis that declared no score was read without one, so its rows'
-        scores are not handed on. A logged row is named by its source
+        scores are not handed on, and one whose rules judge no position is handed
+        none (`AnalysisRules.sequence`). A logged row is named by its source
         coordinate, ``chromosome:position:ref:alt`` as the reader spelt it.
         """
         declared = self.reads_imputation_scores
+        placed = self.rules.sequence is not None
         return self.source_rows(
             SourceRows(
                 eaf=batch.eaf,
@@ -215,6 +217,8 @@ class Gate:
                 imputation_status=batch.imputation_status if declared else None,
                 se=batch.se,
                 z=batch.z,
+                chromosome=np.asarray(batch.chromosome, dtype=object) if placed else None,
+                position=np.asarray(batch.position, dtype=np.int64) if placed else None,
                 keys_at=lambda positions: [
                     f"{batch.chromosome[i]}:{batch.position[i]}:{batch.ref[i]}:{batch.alt[i]}"
                     for i in positions.tolist()

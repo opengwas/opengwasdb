@@ -573,7 +573,7 @@ def _route_and_spill(
     pool.
     """
     col_idx, row = task
-    rules = context.rules[row.trait_id]
+    rules = context.rules[row.trait_id].judging_positions_on(row.source_assembly)
     reader = open_source(
         row.source, imputation_score_declaration=rules.info.imputation_score_declaration
     )

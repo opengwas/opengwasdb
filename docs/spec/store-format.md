@@ -351,7 +351,8 @@ tells from the header (ADR 0079):
   indel on a row of any other code is dropped as `indel_ssf_hm_code`;
 - where the study's alleles are the main columns and the harmonised ones are
   `hm_other_allele`/`hm_effect_allele`, every indel is dropped as
-  `indel_ssf_hm_columns`;
+  `indel_ssf_hm_columns`, and so is every row whose `hm_code` is 14, 15 or 16,
+  as `hm_unplaced` (below);
 - where the file carries no harmoniser column, every indel is dropped as
   `indel_ssf_unharmonised`;
 - a file with any other mix of harmoniser columns is refused.
@@ -423,6 +424,37 @@ and counted by neither `n_unmapped` nor a manifest field). There is no `validate
 holds only the ALIDs that survived, and cannot say which source loci were dropped, so the
 guarantee is the build's. A release built before #325 may hold such an ALID, with its
 `source_alid` blank and the statistics of one source under the rsID of the other.
+
+A GWAS Catalog row its harmoniser placed nowhere names no variant (#410). In the
+layout that keeps the study's alleles in the main columns, a row whose `hm_code`
+is 14 ("Required fields are not known"), 15 ("No matching variants in reference
+VCF") or 16 ("Multiple matching variants in reference VCF") has `NA` in every
+`hm_*` column, and its main-column position is the submitter's: on real files a
+GRCh37 position never lifted, or a position on an alt or random scaffold written
+under the primary chromosome's label (`1:5` was `chr4_GL000008v2_random:5`).
+Every reader drops such a row, whatever its alleles, and none reads it at the
+submitter's position. Only a Store builder counts it: its Admission record logs
+it as `hm_unplaced`. `resolve`, which builds no Store, reads the metrics
+projection, which leaves such rows out uncounted, as it leaves out a malformed
+identity, so a resolved Analysis's totals do not include them.
+The palindrome codes 9, 17 and 18 place their row, which is kept as before.
+
+A Store holds no variant where its assembly has no sequence (#410). GRCh38's
+assembly gaps are its runs of two or more `N`: every chromosome's first 10,000
+or more bases, each centromere, the short arms of 13, 14, 15, 21 and 22. Nor does
+it hold one past its contig's last base. A single `N` is not a gap: UCSC's FASTA
+writes each IUPAC ambiguity code as `N`, and real variants sit on them
+(`17:83128871:G:T`). The package holds the table, 786 gaps and the 25 primary
+contigs' lengths, as `opengwasdb/variants/grch38-assembly-gaps.tsv`, derived from
+UCSC's `hg38.fa.gz` by `scripts/derive_grch38_assembly_gaps.py`, whose header
+names the FASTA's sha256. Every builder drops a row of a source on GRCh38
+placed in a gap or past its contig's end, logs it, per Analysis, as
+`in_assembly_gap` or `past_contig_end`, and holds its variant on no axis;
+`validate` fails a release that holds one (`variant_table.assembly_gap`, §20.0).
+A lifted row is judged after the lift, which #260 adds; until then
+`variant_table.assembly_gap` is the backstop. A lift can land in a gap: the
+hg19-to-GRCh38 chain aligns 1,146 bases of 9 of its 52,571 primary blocks
+there.
 
 A build that lifts a source variant from another Reference Assembly MUST project
 the variant onto the release's assembly using the chain block's orientation: on a
@@ -3156,6 +3188,7 @@ change to this table, which the test suite holds to the registry, in its order.
 | `variant_table.representatives` | release | fold | the tabix index finds the rows the table holds, and on a release before 0.3.0 so does the offset sidecar; on 0.3.0, where no query reads the table or its tabix index, the tabix index is still checked as the convenience it is (§1.1), and the position sidecar, not offsets, places the rows (#469) |
 | `variant_table.indel_order` | release | fold | from format 0.2.2, every indel row's ALID spells its alleles as the row records them: its `effect_allele` then its `other_allele`, and, for a lifted variant, its reference first as its `source_alid` does; not judged on a 0.2.1, 0.2.0 or 0.1.0 release, which sorts an indel's alleles |
 | `variant_table.lifted_contig` | release | fold | no row on an alt, random or unplaced contig has a `source_alid` on another contig: a lift left no variant there (§4); an error from format 0.2.2, a warning on an earlier release, 0.9.0's 0.2.1 included, which #367 owns; a row with no `source_alid` is not judged, and warned of as such: on a release converted `--lifted` that records them as its `variant_table.lifted_contig` deviation, the warning names the conversion, and a recorded count other than the rule's fails it (#504) |
+| `variant_table.assembly_gap` | release | fold | on a GRCh38 release, no row is in an assembly gap, a run of two or more `N`, or past its contig's end (§4, #410): a build drops such a row as `in_assembly_gap` or `past_contig_end`; an error from format 0.2.2, a warning on an earlier release, as `variant_table.lifted_contig` is; a single `N` base is not a gap; a release on another readable assembly is not judged, and one whose `reference_assembly` names no assembly is skipped, saying so |
 | `variant_table.source_alid` | release | fold | a release whose manifest records a lift (a `provenance.lift` block with `n_lifted` above 0, or a `provenance.chain_file`, which a build writes as a default label whether or not it lifted) has at least one row with a `source_alid`; one blank row is no fault (a collision, or a row Reference Completion added from the panel), but a table with none holds no row's lift provenance (#449); a release in which every row is ambiguous under #85 (its sites name different origins) also fails, which only a toy fixture can be; an error on every `format_version`, a 0.2 release included -- every hosted release is rebuilt from source at 0.3.0; the rows are counted from the `source_alid` sidecar from 0.3.0, which `variant_table.source_alid_sidecar` holds to the table, and from the table before it; a Hybrid is judged on its shared table alone |
 | `sqlite.variant_aliases` | release | check | every alias names a variant the table holds; skipped where there is no alias table; not judged on a 0.3.0 release, which carries none |
 | `analyses.readable` | release | check | `analyses.tsv` parses |

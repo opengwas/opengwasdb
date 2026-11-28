@@ -541,9 +541,14 @@ def generate_bundle(out: Path) -> None:
     unpinned = {k: os.environ.get(k) for k, v in PINNED_ENVIRONMENT.items()
                 if os.environ.get(k) != v}
     assert not unpinned, f"the bundle is generated in {PINNED_ENVIRONMENT}, not {unpinned}"
-    with tempfile.TemporaryDirectory() as scratch:
+    from tests.assembly_gap_fixtures import grch38_without_gaps
+
+    with tempfile.TemporaryDirectory() as scratch, tempfile.TemporaryDirectory() as table:
         root = Path(scratch)
-        write_bundle(build(root), root, out)
+        # The bundle's synthetic rows sit at positions like `1:1000`, in GRCh38's first
+        # gap; like the suite's, they read the gap-free test table (#410).
+        with grch38_without_gaps(Path(table)):
+            write_bundle(build(root), root, out)
 
 
 def main(argv: list[str]) -> None:

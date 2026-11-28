@@ -423,6 +423,7 @@ _BUILDS: dict[str, tuple[Callable[[Path], Path], str]] = {
     "beta": (_agreeing(_written("beta")), "hg38"),
     "declared score": (_agreeing(_scored), "hg38", "info"),
     "layout hm_": (_agreeing(_written("hm_ allele columns")), "hg38"),
+    "hm_ unplaced": (_agreeing(_written("hm_ unplaced rows")), "hg38"),
     "unharmonised": (_agreeing(_written("no harmoniser column")), "hg38"),
     "off-primary": (_off_primary, "hg19"),
 }
@@ -446,9 +447,10 @@ def test_pass2_reads_gwas_ssf_batches_as_it_reads_its_associations(
 def test_the_builds_meet_every_drop_reason(builds: dict[str, tuple[Built, Built]]) -> None:
     """What the builds compare includes a row dropped for each reason a
     GWAS-SSF row can be: the one-row rule's two (ADR 0054), an indel each
-    layout places no reference for (ADR 0079), and a lift onto an alt contig."""
+    layout places no reference for (ADR 0079), a lift onto an alt contig, and a row
+    its harmoniser placed nowhere (#410)."""
     assert shared.drop_reasons(builds) >= {
         "allele_invalid", "chromosome_missing", "se_unusable", "effect_missing", "z_nonfinite",
         "duplicate_collapsed", "duplicate_conflicting", "lift_off_primary",
-        "indel_ssf_hm_code", "indel_ssf_hm_columns", "indel_ssf_unharmonised",
+        "indel_ssf_hm_code", "indel_ssf_hm_columns", "indel_ssf_unharmonised", "hm_unplaced",
     }

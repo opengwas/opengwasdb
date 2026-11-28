@@ -17,11 +17,13 @@ from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from functools import lru_cache
+from typing import TypeVar
 
 import numpy as np
 
 from opengwasdb.index.release_index import ReleaseIndex
 from opengwasdb.store_reader.alid import RSID_WIDTH, is_indexable_alid, is_indexable_rsid
+from opengwasdb.store_reader.assembly import normalise_build
 from opengwasdb.store_reader.enums import PrimaryStorageLayout
 from opengwasdb.store_reader.format import (
     carries_alid_sidecar,
@@ -39,7 +41,11 @@ from opengwasdb.store_reader.variant_axis import (
 from opengwasdb.validation import rule as validation_rule
 from opengwasdb.validation.rule import Check, Fold, Kind, Rule, Scan, Skip, Target
 from opengwasdb.validation.rules.release import REQUIRED, current_builders_wrote, severity_owed
+from opengwasdb.variants.assembly_gaps import AssemblySequence, grch38
 from opengwasdb.variants.normalise import chromosome_sort_key
+
+#: What a fold of the Variant Table adds up block by block.
+M = TypeVar("M")
 
 #: Rows one block of the stream holds: enough to amortise the per-block work,
 #: few enough that a block's records are a small, bounded allocation.
@@ -626,7 +632,21 @@ def _judge_lifted_off_primary(_target: Target, found: _LiftedOffPrimary) -> Iter
 
 
 @dataclass(frozen=True, kw_only=True)
-class _ErrorFromFormat(Fold[TableBlock, _LiftedOffPrimary]):
+class _OwedError(Fold[TableBlock, M]):
+    """A fold whose finding is an error on a release of a format the current builders
+    write and a warning on an earlier one (`severity_owed`), which says what the release
+    is without failing a Store nobody can fix in place (#376, #410, #367)."""
+
+    def judged(self, target: Target, total: M) -> Iterator[validation_rule.Finding]:
+        owed = severity_owed(target, validation_rule.Severity.ERROR)
+        for message in self.judge(target, total):
+            # The severity is given, so a recorded deviation of the rule never lowers
+            # what it finds (#504).
+            yield self.finding(target, message, owed)
+
+
+@dataclass(frozen=True, kw_only=True)
+class _ErrorFromFormat(_OwedError[_LiftedOffPrimary]):
     """A fold that fails a release of a format whose builders cannot write what it finds
     (`current_builders_wrote`) and warns on an earlier one (`severity_owed`), which says
     what the release is without failing a Store nobody can fix in place (#376, #367).
@@ -639,10 +659,7 @@ class _ErrorFromFormat(Fold[TableBlock, _LiftedOffPrimary]):
 
     def judged(self, target: Target, total: _LiftedOffPrimary) -> Iterator[validation_rule.Finding]:
         severity = validation_rule.Severity
-        for message in self.judge(target, total):
-            # The severity is given, so a recorded deviation of this rule, which is the
-            # unjudged rows', never lowers a lift onto an alt contig (#504).
-            yield self.finding(target, message, severity_owed(target, severity.ERROR))
+        yield from super().judged(target, total)
         if not total.n_rows and total.n_unjudged:
             message = (
                 f"{_unjudged(total)}: variants.tsv.gz has non-primary-contig variants with no "
@@ -660,6 +677,76 @@ class _ErrorFromFormat(Fold[TableBlock, _LiftedOffPrimary]):
                     f"{self.name} deviation, so the record does not describe this table",
                     severity.ERROR,
                 )
+
+
+@dataclass(frozen=True)
+class _OffSequence:
+    """How many table rows lie where the assembly has no sequence, and the first."""
+
+    n_rows: int = 0
+    first: str = ""
+
+    def __add__(self, other: _OffSequence) -> _OffSequence:
+        return _OffSequence(self.n_rows + other.n_rows, self.first or other.first)
+
+
+def _gap_table(target: Target) -> AssemblySequence | None:
+    """The gap table of the release's assembly, or None where it has none to read."""
+    try:
+        build = normalise_build(target.store.manifest.reference_assembly)
+    except ValueError:
+        return None
+    return grch38() if build == "hg38" else None
+
+
+def _off_sequence(target: Target, block: TableBlock) -> _OffSequence:
+    """Each row in a GRCh38 assembly gap, or past its contig's end (#410)."""
+    sequence = _gap_table(target)
+    if sequence is None or not block.records:
+        return _OffSequence()
+    records = block.records
+    outside = sequence.outside_at((r.chromosome for r in records), (r.position for r in records))
+    rows = np.flatnonzero(outside)
+    if not len(rows):
+        return _OffSequence()
+    first = int(rows[0])
+    return _OffSequence(len(rows), f"row {block.start + first}: {records[first].alid}")
+
+
+def _not_another_assembly(target: Target) -> bool:
+    """Whether the rule applies: not to a release on a readable assembly other than
+    GRCh38, the only one with a gap table. One whose assembly cannot be read is judged
+    to say so (`_require_a_gap_table`), never passed over."""
+    try:
+        return normalise_build(target.store.manifest.reference_assembly) == "hg38"
+    except ValueError:
+        return True
+
+
+def _require_a_gap_table(target: Target) -> None:
+    """Skip, saying why, a release whose `reference_assembly` names no assembly this
+    package reads: no position can be judged. Not a pass: nothing was judged."""
+    assembly = target.store.manifest.reference_assembly
+    try:
+        normalise_build(assembly)
+    except ValueError as exc:
+        raise Skip(
+            f"reference_assembly {assembly!r} names no assembly this package reads, so no "
+            f"position can be judged against one ({exc})"
+        ) from exc
+
+
+def _judge_off_sequence(target: Target, found: _OffSequence) -> Iterator[str]:
+    _require_a_gap_table(target)
+    if found.n_rows:
+        yield (
+            f"{found.n_rows} variant(s) of variants.tsv.gz lie where GRCh38 has no sequence, "
+            f"in an assembly gap or past their contig's end ({found.first}): a build drops "
+            "and counts such rows as in_assembly_gap or past_contig_end (#410), so this "
+            "release was built before that -- rebuild it"
+        )
+
+
 
 
 def _recorded_unjudged(target: Target, rule: str) -> int | None:
@@ -881,6 +968,16 @@ _RULES: tuple[Rule, ...] = (
         zero=_LiftedOffPrimary(),
         measure=_lifted_off_primary,
         judge=_judge_lifted_off_primary,
+    ),
+    _OwedError(
+        name="variant_table.assembly_gap",
+        kinds=Kind.RELEASE,
+        after=(REQUIRED,),
+        when=_not_another_assembly,
+        scan=VARIANT_TABLE,
+        zero=_OffSequence(),
+        measure=_off_sequence,
+        judge=_judge_off_sequence,
     ),
     Fold(
         name="variant_table.source_alid",

@@ -21,6 +21,23 @@
 > Admission record's `lift_collisions.tsv` names each dropped source with its ALID
 > and rsid.
 >
+> **Amended 27 Nov 2026 (issue #410): rows that name no place on GRCh38.** Three
+> reasons are appended after #325's `lift_collision`, so the codes before them keep
+> their positions, and the rule set's version is `admission/16`. `hm_unplaced`: in
+> the GWAS Catalog layout whose harmonised alleles are in `hm_*` columns, a row
+> whose `hm_code` is 14, 15
+> or 16 (EBI: required fields not known; no matching variant in the reference
+> VCF; several matching variants) is dropped by the reader whatever its alleles,
+> never read at the submitter's position (owner, 27 Nov 2026). In OGS-00011's
+> 731 such sources, 4,360,634, 53,177,527 and 11,123 rows had those codes, and
+> about 3.19M of the code-15 SNVs were placed wrongly: GRCh37 positions never
+> lifted, or alt and random scaffold positions written under a primary
+> chromosome's label. `in_assembly_gap` and `past_contig_end`: every builder
+> drops a row of a source on GRCh38 placed in a run of two or more `N`, or past
+> its contig's last base, before its values are judged, and no axis holds its
+> variant. A lifted row is judged after the lift, which #260 adds; until then the
+> release rule `variant_table.assembly_gap` is the backstop. All three are logged.
+>
 > **Clarified 7 Nov 2026 (issue #316): D5 has no reversed-indel case.** With
 > every indel's ALID spelt reference first, the rows of one (variant,
 > Analysis) are never an insertion and a deletion, so #316 removed the
@@ -136,6 +153,9 @@ name the decisions issue #357 took on the rules that differed.
 | `lift_unmapped` | its source is lifted onto the Store's assembly and the chain places its site nowhere | yes | #386 |
 | `lift_ambiguous` | its Routing Key is declared by a lifted source and by a source already on the Store's assembly: two loci sharing a string, so no row of it is placed | yes | #386 |
 | `lift_off_primary` | its source is lifted onto the Store's assembly and the chain places its site on an alt, random or unplaced contig, which a Store does not hold | yes | #376 |
+| `hm_unplaced` | in a GWAS-SSF file that keeps its harmonised alleles in `hm_*` columns, its `hm_code` is 14, 15 or 16: the harmoniser placed it nowhere, so its main-column position is the submitter's. The reader drops it before any other rule judges it | yes | #410 |
+| `in_assembly_gap` | its source is on the Store's assembly and its position is in an assembly gap, a run of two or more `N`. It is judged before its values | yes | #410 |
+| `past_contig_end` | the same, past its contig's last base | yes | #410 |
 
 `build-ragged-ssf` lifts a source declaring another build, and counts what the
 lift drops under its own three reasons (`lift_unmapped`, `lift_ambiguous` and, since
