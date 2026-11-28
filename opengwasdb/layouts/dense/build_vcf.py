@@ -434,7 +434,8 @@ def _prepare_axis(
 
     hg19-declared rows are lifted to GRCh38 once (issue #85), or a precomputed
     ``variant_reference`` supplies the axis directly and Pass 1 only harvests
-    the names it lacks (single-pass build, issues #185, #255). Either way the
+    names, filling every variant the reference leaves unnamed (single-pass
+    build, issues #185, #255, #258). Either way the
     provenance-carrying variant axis is written and checked against the names
     it was written from, and the route table is built -- consuming the
     routing's site map before any worker forks (issue 043).
@@ -448,8 +449,8 @@ def _prepare_axis(
         # nothing else names a variant; the harvest it held is freed here.
         routing.names = routing.names.finish()
         log.info(
-            "Single-pass build: reference names no rsids; Pass 1 harvest resolved %d for "
-            "the variant axis",
+            "Single-pass build: Pass 1 harvest resolved %d rsid(s) for the variant axis, "
+            "the reference's own names winning",
             len(routing.names.rsid_by_alid),
         )
     axis = _axis_metadata(routing.alids, manifest_rows)

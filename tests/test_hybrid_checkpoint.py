@@ -577,7 +577,7 @@ class TestRefusals:
         with pytest.raises(ValueError, match="records format version"):
             resume_hybrid_build(checkpoint_dir)
 
-    @pytest.mark.parametrize("older", [1, 2, 3, 4, 5])
+    @pytest.mark.parametrize("older", [1, 2, 3, 4, 5, 6, 7])
     def test_an_older_format_checkpoint_is_refused(self, tmp_path, monkeypatch, older):
         """An older record is refused, never reinterpreted.
 
@@ -587,8 +587,11 @@ class TestRefusals:
         (opengwasdb#357) records its Pass 2 counts in a shape that predates
         Association Admission's reasons. Format 4 records no count of what Pass 2
         left out for an SE above float16's range (opengwasdb#338). Format 5 records
-        no lift-collision identities (opengwasdb#325). A resume must refuse each
-        outright.
+        no lift-collision identities (opengwasdb#325). Format 6 records no lift into
+        a GRCh38 gap (opengwasdb#410, #261). Formats 6 and 7, past the fold under a
+        reference that names rsids, record the names that reference left blank,
+        unharvested, and null conflict counts (opengwasdb#258). A resume must refuse
+        each outright.
         """
         store = self._failed_build(tmp_path, monkeypatch)
         checkpoint_dir = checkpoint_dir_for(store)

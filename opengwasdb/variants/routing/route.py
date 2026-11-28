@@ -3,20 +3,21 @@
 The authority decides. Under `LiftedUnion` the sources themselves are the
 axis: Pass 1 reads each once, lifts the hg19 group to GRCh38 and names each
 ALID by its first-named rsid. Under `FromReference` a Variant Reference is
-the axis and its source keys the routing; Pass 1 runs to harvest names the
-reference lacks, when it names none. A reference that names no source keys (a
-plain ALID list, a Store Variant Table) can route only a GRCh38 row, by
-identity: when an hg19 source is in the build, Pass 1's lifted union routes
-every site and the reference stays the axis (issue #260); otherwise Pass 1 reads
-the sources to say which of its ALIDs a source observed, the only ones that
-carry a ``source_alid`` (issue #261). Either harvest compares the names a site's
+the axis and its source keys the routing; Pass 1 runs to harvest names: the
+reference's own names win, and the harvest fills every variant it leaves
+unnamed (issue #258). A reference that names no source keys (a plain ALID
+list, a Store Variant Table) can route only a GRCh38 row, by identity: when an
+hg19 source is in the build, Pass 1's lifted union routes every site and the
+reference stays the axis (issue #260); otherwise Pass 1's read of the sources
+also says which of its ALIDs a source observed, the only ones that carry a
+``source_alid`` (issue #261). Either harvest compares the names a site's
 spellings carry, by one rule (issue #379).
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import cached_property
 from pathlib import Path
@@ -27,10 +28,7 @@ from opengwasdb.store_reader.identity import (
     is_primary_contig,
 )
 from opengwasdb.variants.axis import sorted_alids
-from opengwasdb.variants.reference import (
-    VariantReference,
-    warn_reference_left_rows_blank,
-)
+from opengwasdb.variants.reference import VariantReference
 from opengwasdb.variants.routing.keys import (
     SourceKey,
     contig_label,
@@ -53,6 +51,7 @@ from opengwasdb.variants.routing.lift import (
 )
 from opengwasdb.variants.routing.names import (
     HARVEST_LABEL,
+    NO_REFERENCE_NAMES,
     RoutedNames,
     SiteNames,
     harvested_names,
@@ -67,7 +66,7 @@ from opengwasdb.variants.routing.union import (
     consume_shards,
     materialize_site_union,
 )
-from opengwasdb.variants.rsid import RsidConflictPolicy, RsidConflicts
+from opengwasdb.variants.rsid import RsidConflictPolicy
 
 log = logging.getLogger(__name__)
 
@@ -94,12 +93,13 @@ class FromReference:
 
     A key the reference records as re-oriented has its statistics re-signed
     exactly as Pass 1's lift re-signs them, so a single-pass build stores what
-    the two-pass one does (issue #354). Pass 1 runs when the reference names no
-    rsids, to harvest them; its lift then uses ``chain_file`` and
-    ``failure_threshold``, though it routes nothing. A reference with no source
-    keys is read beside its sources either way: with an hg19 source, Pass 1's
-    lift, with the same chain and threshold, routes every site (issue #260); with
-    none, Pass 1 says which ALIDs a source observed (issue #261).
+    the two-pass one does (issue #354). Pass 1 runs to harvest the sources'
+    rsids, which name every variant the reference leaves unnamed (issue #258);
+    its lift then uses ``chain_file`` and ``failure_threshold``, though it
+    routes nothing. A reference with no source keys is read beside its sources
+    either way: with an hg19 source, Pass 1's lift, with the same chain and
+    threshold, routes every site (issue #260); with none, Pass 1 says which
+    ALIDs a source observed (issue #261).
     """
 
     reference: VariantReference
@@ -297,18 +297,17 @@ def _route_by_union(
     The sources' own union is the axis, or, under a `FromReference` whose reference
     names no source keys, the reference is (issue #260): it decides which ALIDs
     exist, and a site placed on none of them is off its axis, as an off-panel
-    variant is to a two-pass build. A reference that names its rsids names them."""
+    variant is to a two-pass build. A reference that names rsids names those
+    variants, and the sources name the rest (issue #258)."""
     placed, rsid_by_site, supplied = _place_union_pass(union_pass, authority)
     reference = authority.reference if isinstance(authority, FromReference) else None
-    if reference is not None and reference.rsid_by_alid:
-        names = _reference_names(reference, policy)
-    else:
-        names = union_names(
-            rsid_by_site.without(placed.dropped, collided_sites(placed.collisions)),
-            placed.lookup,
-            policy=policy,
-            label=label,
-        )
+    names = union_names(
+        rsid_by_site.without(placed.dropped, collided_sites(placed.collisions)),
+        placed.lookup,
+        policy=policy,
+        label=label,
+        named=NO_REFERENCE_NAMES if reference is None else reference.rsid_by_alid,
+    )
     return VariantRouting(
         placed.lookup, placed.reoriented,
         axis=None if reference is None else reference.alids,
@@ -316,14 +315,6 @@ def _route_by_union(
         lifted_away=placed.away,
         lift_drops=LiftDrops.of(placed.collisions, rsid_by_site.lifted),
         placed_every_site=True,
-    )
-
-
-def _reference_names(reference: VariantReference, policy: RsidConflictPolicy) -> RoutedNames:
-    """The names a reference that names rsids gives, used as given (issue #255)."""
-    warn_reference_left_rows_blank(reference)
-    return RoutedNames(
-        dict(reference.rsid_by_alid), RsidConflicts(policy, None), reference_named=True
     )
 
 
@@ -383,12 +374,6 @@ class _UnionPass:
             readers=self.readers,
         )
         return result
-
-    def site_keys(self) -> Iterator[SourceKey]:
-        """Every site of the union, whatever its assembly."""
-        tuples_by_assembly, _names = self.sites()
-        for sites in tuples_by_assembly.values():
-            yield from sites
 
 
 def _without_off_primary_lifts(
@@ -535,46 +520,42 @@ def _route_by_reference(
     policy: RsidConflictPolicy,
     label: str,
 ) -> VariantRouting:
-    """A reference's routing, named by the reference or by Pass 1's harvest.
+    """A reference's routing, named by the reference and Pass 1's harvest.
 
-    A reference that names rsids is used as given. One that names none is
-    harvested: Pass 1's candidates, by routing key, minus the tuples both
-    assemblies declare (issue #255 rounds 4-5). Either way the reference routes,
-    and the keys it records as re-oriented are the ones re-oriented (issue #354).
+    The harvest is Pass 1's candidates, by routing key, minus the tuples both
+    assemblies declare (issue #255 rounds 4-5). It names every variant the
+    reference leaves unnamed, and the reference's own names win (issue #258),
+    so a reference that names some rsids is never used as the whole answer. The
+    reference routes, and the keys it records as re-oriented are the ones
+    re-oriented (issue #354).
 
     An artifact's source keys are coordinates its sources supplied, so they are its
     provenance. A plain reference has none: its site map is the identity of every
-    ALID it lists, so Pass 1 reads the sources -- even when the reference names its
-    rsids -- and the sites they supplied, routed as Pass 2 routes them, are what is
-    observed (#261).
+    ALID it lists, so the sites Pass 1 read, routed as Pass 2 routes them, are what
+    is observed (#261).
     """
     reference, off_primary = _without_off_primary_lifts(authority.reference)
     reference, frozen = _without_frozen_collisions(
         reference, union_pass.sources, authority.chain_file
     )
-    if reference.rsid_by_alid:
-        names = _reference_names(reference, policy)
-        lift_drops = LiftDrops.of(frozen)
-        sites = [] if reference.explicit_source_keys else list(union_pass.site_keys())
-        read = SuppliedCoordinates.of_sites(sites)
-        observed = _observed_by(reference, lambda: sites)
-    else:
-        placed, rsid_by_site, read = _place_union_pass(union_pass, authority)
-        observed = _observed_by(reference, lambda: placed.lookup)
-        # A tuple declared under both assemblies is two loci; naming the lifted
-        # one from the other's row would attach an rsid to a variant a different
-        # association owns.
-        candidates = rsid_by_site.without(placed.dropped)
-        # What the harvest's own lift collided on, less the sources the reference routes
-        # itself: those rows are placed, so nothing is dropped of them.
-        lift_drops = LiftDrops.of(
-            _merged_collisions(_unrouted_collisions(placed.collisions, reference), frozen),
-            rsid_by_site.lifted,
-        )
-        names = harvested_names(
-            candidates, reference.source_lookup, placed.lookup, policy=policy, label=label
-        )
-        del rsid_by_site
+    placed, rsid_by_site, read = _place_union_pass(union_pass, authority)
+    observed = _observed_by(reference, lambda: placed.lookup)
+    # A tuple declared under both assemblies is two loci; naming the lifted
+    # one from the other's row would attach an rsid to a variant a different
+    # association owns.
+    candidates = rsid_by_site.without(placed.dropped)
+    # What the harvest's own lift collided on, less the sources the reference routes
+    # itself: those rows are placed, so nothing is dropped of them. Each is named by
+    # the rsid its own source gave it, whether or not the reference names rsids.
+    lift_drops = LiftDrops.of(
+        _merged_collisions(_unrouted_collisions(placed.collisions, reference), frozen),
+        rsid_by_site.lifted,
+    )
+    names = harvested_names(
+        candidates, reference.source_lookup, placed.lookup, policy=policy, label=label,
+        named=reference.rsid_by_alid,
+    )
+    del rsid_by_site
     return VariantRouting(
         reference.source_lookup,
         reference.reoriented,

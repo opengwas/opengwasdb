@@ -108,8 +108,8 @@ def test_a_plain_list_single_pass_hybrid_writes_the_two_pass_variant_table(tmp_p
 
 
 def test_a_store_variant_table_reference_records_only_observed_coordinates(tmp_path):
-    """A reference that names its rsids is used as given, so its rsid column is its own;
-    its `source_alid` column is still the two-pass build's."""
+    """A reference that names its rsids keeps its own names, which win over the
+    harvest's (#258); its `source_alid` column is still the two-pass build's."""
     two_pass = _hybrid(tmp_path, "two", reference_panel=_plain_list(tmp_path))
     single_pass = _hybrid(tmp_path, "single", variant_reference=_variant_table(tmp_path))
     assert _source_alids(single_pass) == _source_alids(two_pass)

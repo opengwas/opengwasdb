@@ -1,13 +1,17 @@
-"""The rs identifier each routed variant carries (issues #109, #192, #255, #306, #379).
+"""The rs identifier each routed variant carries (issues #109, #192, #255, #258, #306, #379).
 
 Pass 1 reads each source's names with its sites, first-named in ``(rank,
 site)`` order. Every harvest keys them by Routing Key, rekeys them once
 through the routing the build actually uses, and compares the result with an
 independent walk of the raw names (the oracles in
 `opengwasdb.variants.reference`): a union the build routes by
-(`union_names`), or a Variant Reference that names none of its variants
-(`harvested_names`). A key whose sources name it differently is refused or
-left unnamed, as ``--on-rsid-conflict`` says, and counted, whichever routes.
+(`union_names`), or a Variant Reference's routing (`harvested_names`). A key
+whose sources name it differently is refused or left unnamed, as
+``--on-rsid-conflict`` says, and counted, whichever routes.
+
+A Variant Reference that names rsids is harvested too, and its names win: it
+names the variants it names, and the sources fill every one it leaves unnamed
+(issue #258).
 
 A Hybrid build routes the keys the reference does not know only in its fold,
 after Pass 2, so its names stay pending until `RoutedNames.finish` is given
@@ -68,6 +72,9 @@ def _rekey_rsids_to_alids(
 
 #: No placement: a harvest keyed for a routing it is given, not one it forms.
 _UNPLACED: Mapping[SourceKey, str] = MappingProxyType({})
+
+#: No names of a Variant Reference's own: every name is the sources'.
+NO_REFERENCE_NAMES: Mapping[str, str] = MappingProxyType({})
 
 
 class _Keyed(NamedTuple):
@@ -194,6 +201,7 @@ def _rekey_and_verify(
     label: str,
     on_conflict: RsidConflictPolicy,
     site_alid: Mapping[SourceKey, str] = _UNPLACED,
+    named: Mapping[str, str] = NO_REFERENCE_NAMES,
 ) -> tuple[dict[str, str], set[str], dict[str, list[str]]]:
     """Rekey harvested candidates ONCE through ONE routing, and verify exactly.
 
@@ -210,6 +218,10 @@ def _rekey_and_verify(
     collapse that keeps the wrong name disagrees with the raw walk and fails
     (issue #255 round 4). Under ``drop`` it finds the disputed keys itself too,
     so a variant one reaches that kept a name fails as well (issue #306).
+
+    ``named`` is a Variant Reference's own names. Each wins over the sources'
+    for its variant (`_with_reference_names`), which is then not left unnamed;
+    the oracle takes them as the first candidates of its own walk (issue #258).
     Returns the resolved map, the variants left unnamed under ``drop``, and
     each disputed key's names.
     """
@@ -222,11 +234,53 @@ def _rekey_and_verify(
     resolved = _rekey_rsids_to_alids(routing, candidates)
     del candidates, placed
     withheld = withhold_disputed(resolved, routing, conflicts)
+    _log_reference_disagreements(resolved, named, label=label)
+    resolved = _with_reference_names(resolved, named)
+    withheld.difference_update(named)
     expected = expected_rsids_by_routed_key(
-        rsid_by_site, routing, routing_key, drop_disputed=on_conflict is RsidConflictPolicy.DROP
+        rsid_by_site,
+        routing,
+        routing_key,
+        drop_disputed=on_conflict is RsidConflictPolicy.DROP,
+        named=named,
     )
     require_rsids_match_expected(resolved, expected)
     return resolved, withheld, conflicts
+
+
+def _with_reference_names(
+    harvested: dict[str, str], named: Mapping[str, str]
+) -> dict[str, str]:
+    """``harvested`` with a Variant Reference's own names over it: where the
+    reference names a variant its name is the one stored, and every variant it
+    leaves unnamed keeps the sources' name (issue #258). Updates ``harvested``."""
+    harvested.update(named)
+    return harvested
+
+
+def _log_reference_disagreements(
+    harvested: Mapping[str, str], named: Mapping[str, str], *, label: str
+) -> None:
+    """Count the variants a Variant Reference names other than its sources do.
+
+    The reference wins (`_with_reference_names`), so this is a count, not a
+    refusal; a curated reference is entitled to rename. A variant whose sources
+    name nothing, or that ``drop`` left unnamed, is not a disagreement."""
+    differ = sorted(
+        alid for alid, rsid in named.items() if harvested.get(alid) not in (None, "", rsid)
+    )
+    if not differ:
+        return
+    first = differ[0]
+    log.warning(
+        "%s: %d variant(s) the Variant Reference names differently from its sources; "
+        "the reference's name is stored (e.g. %s: reference %s, sources %s)",
+        label,
+        len(differ),
+        first,
+        named[first],
+        harvested[first],
+    )
 
 
 def _log_dropped_rsids(label: str, conflicts: RsidConflicts) -> None:
@@ -291,11 +345,13 @@ class SiteNames(Mapping[SourceKey, str]):
 @dataclass(frozen=True)
 class _Harvest:
     """What a pending harvest still needs: the raw names, in ``(rank, site)``
-    order, and the authority's routing of the keys they name."""
+    order, the authority's routing of the keys they name, and the reference's
+    own names, which win."""
 
     rsid_by_site: Mapping[SourceKey, str]
     candidate_routing: Mapping[str, str]
     label: str
+    named: Mapping[str, str] = NO_REFERENCE_NAMES
 
 
 @dataclass(frozen=True)
@@ -310,13 +366,11 @@ class RoutedNames:
     only the reference-routed names, and `require_written` refuses it.
 
     ``conflicts`` counts the routing keys whose sources name them differently
-    and, once final, the variants they reach. ``reference_named`` says the
-    reference supplied its own names and no source was read for them.
+    and, once final, the variants they reach.
     """
 
     rsid_by_alid: dict[str, str]
     conflicts: RsidConflicts
-    reference_named: bool = False
     _harvest: _Harvest | None = None
 
     @property
@@ -344,6 +398,7 @@ class RoutedNames:
             combined,
             label=label,
             on_conflict=self.conflicts.policy,
+            named=harvest.named,
         )
         if merged == self.rsid_by_alid:
             # Unchanged: keep the map a caller may already have written, order and all.
@@ -357,7 +412,7 @@ class RoutedNames:
         # Only the combined routing says which stored variant each disputed key reaches.
         conflicts = self.conflicts.reaching(len(withheld))
         _log_dropped_rsids(label, conflicts)
-        return RoutedNames(merged, conflicts, reference_named=self.reference_named)
+        return RoutedNames(merged, conflicts)
 
     def require_written(self, store: str | Path, alids: Sequence[str]) -> None:
         """Refuse a written Store Variant Table that disagrees with these names.
@@ -399,8 +454,12 @@ def harvested_names(
     *,
     policy: RsidConflictPolicy,
     label: str = HARVEST_LABEL,
+    named: Mapping[str, str] = NO_REFERENCE_NAMES,
 ) -> RoutedNames:
-    """Pending names for a reference that names none, from Pass 1's harvest.
+    """Pending names for a Variant Reference's routing, from Pass 1's harvest.
+
+    ``named`` is the reference's own names: each wins for its variant, and the
+    harvest fills every variant the reference leaves unnamed (issue #258).
 
     The harvest is keyed as the build routes, so two raw sites one routing key
     spells -- one site in two cases -- are one stored variant; a key named two
@@ -421,9 +480,9 @@ def harvested_names(
     on_reference = _rekey_rsids_to_alids(candidate_routing, candidates)
     withhold_disputed(on_reference, candidate_routing, conflicts)
     return RoutedNames(
-        on_reference,
+        _with_reference_names(on_reference, named),
         RsidConflicts.found(policy, conflicts),
-        _harvest=_Harvest(rsid_by_site, candidate_routing, label),
+        _harvest=_Harvest(rsid_by_site, candidate_routing, label, named),
     )
 
 
@@ -443,6 +502,7 @@ def union_names(
     *,
     policy: RsidConflictPolicy,
     label: str,
+    named: Mapping[str, str] = NO_REFERENCE_NAMES,
 ) -> RoutedNames:
     """Final names for a union the build routes by: every site is placed already.
 
@@ -452,9 +512,10 @@ def union_names(
     named two ways is refused or left unnamed, as ``policy`` says, so which
     source is listed first never decides a name its sources dispute (issue
     #379). Only named sites are keyed: they are every key a name can reach.
+    ``named`` is a Variant Reference's own names, which win (issue #258).
     """
     resolved, withheld, disputed = _rekey_and_verify(
-        rsid_by_site, None, label=label, on_conflict=policy, site_alid=site_alid
+        rsid_by_site, None, label=label, on_conflict=policy, site_alid=site_alid, named=named
     )
     conflicts = RsidConflicts.found(policy, disputed).reaching(len(withheld))
     _log_dropped_rsids(label, conflicts)

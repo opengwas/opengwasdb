@@ -225,26 +225,89 @@ def test_a_harvested_name_follows_the_reference_routing_not_the_lift(tmp_path):
     assert routing.alids == ["3:5000:A:G"]
 
 
-def test_a_named_reference_is_used_as_given_and_nothing_is_read():
-    reference = VariantReference(
-        ["1:100:A:G"],
-        {("1", 100, "A", "G"): "1:100:A:G"},
+def _named_reference() -> VariantReference:
+    """An artifact routing 1:100 and 1:200, and naming only 1:100: rsREF."""
+    return VariantReference(
+        ["1:100:A:G", "1:200:C:T"],
+        {("1", 100, "A", "G"): "1:100:A:G", ("1", 200, "C", "T"): "1:200:C:T"},
         {"1:100:A:G": "rsREF"},
         True,
         frozenset(),
     )
 
-    def _no_read(_spec: SourceSpec) -> FakeReader:
-        raise AssertionError("a reference that names its variants read a source")
 
-    spec = SourceSpec("a", "a", "fake", "hg38", StoredEffectScale.SD)
-    routing = route_variants(
-        [spec], FromReference(reference), readers=_no_read
+def _off_reference_route(key: str) -> str | None:
+    """The fold's placement of the one off-reference key these tests' sources declare."""
+    return "1:300:A:G" if key == "1:300:G:A" else None
+
+
+def test_a_named_reference_fills_what_it_leaves_unnamed_and_its_names_win(caplog):
+    """The source names all three variants: 1:100 differently from the reference, 1:200
+    (a reference row the reference leaves unnamed) and 1:300 (off the reference). The
+    reference's name wins where it has one; the harvest fills the rest (#258)."""
+    import logging
+
+    source = _source(
+        "a", "hg38",
+        [("1", 100, "A", "G", "rsSOURCE"), ("1", 200, "C", "T", "rsFILLED"),
+         ("1", 300, "G", "A", "rsOFF")],
     )
 
-    assert routing.names.reference_named
-    assert routing.names.rsid_by_alid == {"1:100:A:G": "rsREF"}
-    assert routing.names.conflicts.n_keys is None
+    with caplog.at_level(logging.WARNING):
+        routing = _route([source], FromReference(_named_reference()))
+        assert routing.names.pending, "the harvest ran"
+        assert routing.names.rsid_by_alid == {"1:100:A:G": "rsREF", "1:200:C:T": "rsFILLED"}
+        names = routing.names.finish(_off_reference_route)
+
+    assert names.rsid_by_alid == {
+        "1:100:A:G": "rsREF", "1:200:C:T": "rsFILLED", "1:300:A:G": "rsOFF"
+    }
+    assert (names.conflicts.n_keys, names.conflicts.n_variants) == (0, 0)
+    assert "1 variant(s) the Variant Reference names differently" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("disputed", "expected", "n_variants"),
+    [
+        ("1:100", {"1:100:A:G": "rsREF", "1:200:C:T": "rsAGREED"}, 0),
+        ("1:200", {"1:100:A:G": "rsREF"}, 1),
+    ],
+    ids=["reference-named", "reference-unnamed"],
+)
+def test_drop_under_a_named_reference_keeps_its_name_and_unnames_the_rest(
+    disputed, expected, n_variants
+):
+    """Under ``drop`` a variant the sources name two ways is unnamed, unless the
+    reference names it: then the reference's name is stored, and no variant is
+    counted as left unnamed (#258)."""
+    chrom, pos = disputed.split(":")
+    other = "1:200" if disputed == "1:100" else "1:100"
+    alleles = {"1:100": ("A", "G"), "1:200": ("C", "T")}
+    # Two spellings of one Routing Key: one site's names are first-named per source.
+    rows_a = [(chrom, int(pos), *alleles[disputed], "rsONE")]
+    rows_b = [(chrom, int(pos), *(a.lower() for a in alleles[disputed]), "rsTWO")]
+    o_chrom, o_pos = other.split(":")
+    rows_a.append((o_chrom, int(o_pos), *alleles[other], "rsAGREED"))
+    sources = [_source("a", "hg38", rows_a), _source("b", "hg38", rows_b)]
+
+    routing = _route(
+        sources, FromReference(_named_reference()), on_rsid_conflict=RsidConflictPolicy.DROP
+    )
+    names = routing.names.finish()
+
+    assert names.rsid_by_alid == expected
+    assert (names.conflicts.n_keys, names.conflicts.n_variants) == (1, n_variants)
+
+
+def test_refuse_under_a_named_reference_refuses_a_key_its_sources_dispute():
+    """The sources' names are compared by the one rule whichever name is stored: a
+    reference that names the variant does not hide its sources' dispute (#258)."""
+    sources = [
+        _source("a", "hg38", [("1", 100, "A", "G", "rsONE")]),
+        _source("b", "hg38", [("1", 100, "a", "g", "rsTWO")]),
+    ]
+    with pytest.raises(ValueError, match="'1:100:A:G' with different rsids"):
+        _route(sources, FromReference(_named_reference()))
 
 
 def test_finish_gives_a_variant_the_globally_first_name(tmp_path):
@@ -554,21 +617,26 @@ def _identity_reference(alids: list[str], rsid_by_alid: dict[str, str]) -> Varia
     return VariantReference(alids, lookup, rsid_by_alid, False, frozenset())
 
 
-def test_a_reference_with_no_source_keys_lifts_an_hg19_source_and_keeps_its_names(tmp_path):
+def test_a_reference_with_no_source_keys_lifts_an_hg19_source_and_fills_its_names(tmp_path):
     """hg19 2:1000 G>A lifts onto the reverse strand to 2:999001:C:T. A Store Variant
     Table that names its rsids and also lists 2:1000:A:G routes the row by the lift, not
-    by its own coordinate, re-oriented; the names are the reference's, as given (#260)."""
+    by its own coordinate, re-oriented (#260). Its name wins over the source's; the row
+    it leaves unnamed, 3:1000:A:G, takes its source's name (#258)."""
     chain = write_two_strand_chain(tmp_path / "strands.chain")
-    source = _source("a", "hg19", [("2", 1_000, "G", "A", "rsSOURCE")])
-    reference = _identity_reference(["2:1000:A:G", "2:999001:C:T"], {"2:999001:C:T": "rsREF"})
+    source = _source(
+        "a", "hg19", [("2", 1_000, "G", "A", "rsSOURCE"), ("3", 1_000, "G", "A", "rsTHREE")]
+    )
+    reference = _identity_reference(
+        ["2:1000:A:G", "2:999001:C:T", "3:1000:A:G"], {"2:999001:C:T": "rsREF"}
+    )
     assert reference.source_lookup[("2", 1_000, "G", "A")] == "2:1000:A:G", "fixture: the trap"
 
     routing = _route([source], FromReference(reference, chain))
 
     assert routing.placed_every_site
-    assert routing.alids == ["2:1000:A:G", "2:999001:C:T"]
-    assert routing.names.reference_named
-    assert routing.names.rsid_by_alid == {"2:999001:C:T": "rsREF"}
+    assert routing.alids == ["2:1000:A:G", "2:999001:C:T", "3:1000:A:G"]
+    assert routing.names.rsid_by_alid == {"2:999001:C:T": "rsREF", "3:1000:A:G": "rsTHREE"}
+    assert routing.names.conflicts.n_keys == 0, "the sources' names were compared"
     column = routing.table([routing.alids]).route_column(
         [_association(("2", 1_000, "G", "A"), 1.0)]
     )
@@ -576,12 +644,28 @@ def test_a_reference_with_no_source_keys_lifts_an_hg19_source_and_keeps_its_name
     assert column.placed[0].z.tolist() == [-1.0], "re-oriented by the reverse strand"
 
 
+def test_a_reference_with_no_source_keys_routes_grch38_sources_by_identity_and_fills():
+    """With no hg19 source nothing is lifted: the reference routes by identity, and the
+    harvest fills the row it leaves unnamed (#258)."""
+    reference = _identity_reference(["1:100:A:G", "1:200:C:T"], {"1:100:A:G": "rsREF"})
+    source = _source(
+        "a", "hg38", [("1", 100, "A", "G", "rsSOURCE"), ("1", 200, "T", "C", "rsFILLED")]
+    )
+
+    routing = _route([source], FromReference(reference))
+
+    assert not routing.placed_every_site
+    assert routing.names.finish().rsid_by_alid == {
+        "1:100:A:G": "rsREF", "1:200:C:T": "rsFILLED"
+    }
+
+
 @pytest.mark.parametrize("named", [True, False], ids=["names-rsids", "names-none"])
 def test_a_reference_with_no_source_keys_routes_grch38_sources_by_identity(named):
     """With no hg19 source nothing is lifted: the reference routes by identity, and its
     sources are read only to say which of its ALIDs one observed, the only ones that
-    carry a source_alid (#261). It reads them even when it names its rsids, which are
-    then used as given."""
+    carry a source_alid (#261), and for the names the harvest fills (#258). It reads
+    them even when it names its rsids, whose names win."""
     rsids = {"1:100:A:G": "rsREF"} if named else {}
     reference = _identity_reference(["1:100:A:G", "1:200:C:T"], rsids)
     # The source spells 1:100 the other way round and in lower case: its Routing Key
@@ -608,8 +692,9 @@ def test_a_reference_with_no_source_keys_refuses_a_source_of_another_assembly():
 def test_an_artifact_routing_two_lifted_loci_to_one_alid_routes_neither(tmp_path):
     """An artifact frozen before #325 routes hg19 501 and 1001 to 1:5501:A:G; a GRCh38
     source's own key at an ALID is one variant from two builds, and is kept (#85). The
-    reference names its rsids, so Pass 1 reads nothing: the artifact says what collided,
-    and the chain only that 1:6001 is not an hg19 coordinate it leaves in place."""
+    harvest's lift places neither hg19 site under the default chain (the threshold
+    admits that), so the artifact alone says what collided, and the chain only that
+    1:6001 is not an hg19 coordinate it leaves in place."""
     lookup = {
         ("1", 501, "A", "G"): "1:5501:A:G",
         ("1", 1_001, "A", "G"): "1:5501:A:G",
@@ -620,7 +705,7 @@ def test_an_artifact_routing_two_lifted_loci_to_one_alid_routes_neither(tmp_path
     hg19 = _source("b", "hg19", [("1", 501, "A", "G", ""), ("1", 1_001, "A", "G", "")])
     hg38 = _source("a", "hg38", [("1", 6_001, "C", "T", "")])
 
-    routing = _route([hg38, hg19], FromReference(reference))
+    routing = _route([hg38, hg19], FromReference(reference, failure_threshold=1.0))
 
     assert routing.alids == ["1:5501:A:G", CLEAN], "the reference keeps its ALIDs"
     assert sorted(routing.lift_drops.keys) == ["1:1001:A:G", "1:501:A:G"]
@@ -651,7 +736,9 @@ def test_an_artifact_key_at_its_own_locus_is_lifted_where_the_chain_keeps_it(
     hg19 = _source("b", "hg19", [("1", 501, "A", "G", ""), ("1", 5_501, "A", "G", "")])
     hg38 = _source("a", "hg38", [("1", 9_001, "A", "C", "")])
 
-    routing = _route([hg38, hg19], FromReference(reference, write_chain(tmp_path / "c")))
+    # The harvest's lift may fail hg19 5501, which only the reference routes.
+    authority = FromReference(reference, write_chain(tmp_path / "c"), failure_threshold=1.0)
+    routing = _route([hg38, hg19], authority)
 
     assert sorted(routing.lift_drops.keys) == dropped
     routed = {"1:9001:A:C"} | (set() if dropped else {"1:5501:A:G"})
@@ -1165,14 +1252,14 @@ def test_an_extracted_reference_routes_as_the_union_it_froze(tmp_path, n_workers
     )
     union = _route(sources, LiftedUnion(chain))
     frozen = _route(
-        sources, FromReference(read_variant_reference(artifact))
+        sources, FromReference(read_variant_reference(artifact), chain)
     )
 
     assert result.n_variants == len(union.alids) == 3
     assert frozen.alids == union.alids
     # Both allele orders of 5:10 are one site each; in source order the
     # A:G site sorts first, so its name is the first named.
-    assert frozen.names.rsid_by_alid == union.names.rsid_by_alid == {
+    assert frozen.names.finish().rsid_by_alid == union.names.rsid_by_alid == {
         "3:1000:A:G": "rs1",
         "5:10:A:G": "rs9",
     }

@@ -125,7 +125,13 @@ __all__ = [
 #: ``in_assembly_gap`` or ``past_contig_end`` (``axis_lifted_away.tsv``). A format-6
 #: checkpoint's axis may hold a lift's ALID in a GRCh38 gap with no record of it, so
 #: it is refused and the build starts again.
-CHECKPOINT_FORMAT_VERSION = 7
+#:
+#: **8** (opengwasdb#258): a reference that names rsids is harvested, so the
+#: recorded names fill every variant it leaves unnamed and the recorded conflict
+#: counts are the harvest's. A checkpoint before it (format 6 or 7) past its fold
+#: under such a reference records those variants unnamed and its counts as null,
+#: and a resume would publish both; it is refused and the build starts again.
+CHECKPOINT_FORMAT_VERSION = 8
 
 #: The function a refusal tells an operator to call.
 RESUME_FUNCTION = "resume_hybrid_build"

@@ -412,8 +412,8 @@ the fold's off-reference lift and `build-ragged-ssf` call), and `place_sites` re
 return a lifted group with two loci on one ALID. A dropped site is still a lifted locus for the
 both-assemblies rule: a GRCh38 source that spells its key is dropped with it, so no
 dropped source's statistics route onto another row by its raw key. A build routed by
-a Variant Reference that names no rsids records the collisions its harvest's lift
-finds, and counts the rows of those the reference does not route. A Variant Reference
+a Variant Reference records the collisions its harvest's lift finds (every such build
+harvests, #258), and counts the rows of those the reference does not route. A Variant Reference
 artifact is checked when it is read for routing: an ALID it routes from two or more lifted
 source loci loses all of those source keys, which are dropped and recorded
 as a lift collision is, and the ALID stays on the axis with no source key reaching it
@@ -422,14 +422,16 @@ GRCh38 key always is; when every source of the build is hg19, every key is. The 
 does not say which assembly spelled a key at that locus, so in a mixed manifest one that
 shares its ALID with a moved key is lifted where the build's chain, reading its coordinate
 as hg19, leaves it in place, and is a GRCh38 key where the chain places it elsewhere or
-nowhere. An extraction made before #260 may hold such an ALID. `extract-variant-reference` applies the rule itself, held to the lifted sites, once every site of an ALID has met in its post-lift window: each lifted source of a collided ALID is left out of the artifact and returned, with its ALID and own rsID, and a lifted site the both-assemblies rule drops still collides there, as in `place_union`. The artifact records no dropped key, so a build that reads it as given (it names its rsIDs) counts those sources' rows `off_axis`, or a Hybrid fold finds the collision itself. Every build counts the rows of
+nowhere. An extraction made before #260 may hold such an ALID. `extract-variant-reference` applies the rule itself, held to the lifted sites, once every site of an ALID has met in its post-lift window: each lifted source of a collided ALID is left out of the artifact and returned, with its ALID and own rsID, and a lifted site the both-assemblies rule drops still collides there, as in `place_union`. The artifact records no dropped key, so a build that reads it finds the collision again by its harvest's lift, and counts those sources' rows `lift_collision`. Every build counts the rows of
 a site its routing dropped in Pass 2, the Hybrid fold included: a fold never meets one of
 them alone, to place it on the ALID. A reference with no source keys routes an hg19 source
 through `place_union` (below), so the rule reaches it as it reaches a two-pass build. Each dropped source is recorded by both identities, in
 `lift_collisions.tsv` beside the Admission record's `admission.json` (`target_alid`,
-`source_key`, `rsid`, one row per source the build dropped rows of, never one it merely found colliding; the source key is spelled as its source wrote it, and the rsID is the one its own hg19 sources named it, empty where they named none, never a GRCh38 source's. The Hybrid fold's spill keeps a key upper-cased, so it takes both from what its harvest's lift recorded for that source, and refuses a site that lift did not drop; a fold under a reference that names its own rsIDs harvests nothing, and records the upper-cased key with an empty rsID), and each row of it is dropped,
+`source_key`, `rsid`, one row per source the build dropped rows of, never one it merely found colliding; the source key is spelled as its source wrote it, and the rsID is the one its own hg19 sources named it, empty where they named none, never a GRCh38 source's. The Hybrid fold's spill keeps a key upper-cased, so it takes both from what its harvest's lift recorded for that source, and refuses a site that lift did not drop; every reference is harvested, one that names its own rsIDs included, so no build records a named source with an empty rsID (#258)), and each row of it is dropped,
 logged by source key and counted, per Analysis, as `lift_collision` (or, for a row of a source already on the Store's assembly that spells a dropped site's key, `lift_ambiguous`) (Admission rules
-`admission/15`; the Hybrid fold's, in its `fold` stage; `build-ragged-ssf`'s, in its own gate,
+`admission/15`; the Hybrid fold's, in its `fold` stage, which since #258 is a guard only:
+every Variant Reference is harvested, so Pass 2 drops each collided row by its key and no
+build is known to reach the fold's own collision check; `build-ragged-ssf`'s, in its own gate,
 and counted by neither `n_unmapped` nor a manifest field). There is no `validate` rule: a Store
 holds only the ALIDs that survived, and cannot say which source loci were dropped, so the
 guarantee is the build's. A release built before #325 may hold such an ALID, with its
@@ -452,11 +454,11 @@ the Ragged Overflow before Pass 2 and nothing is folded, so the release is the o
 `build-dense-vcf` its rows are dropped and counted `off_axis`, so the release is the
 two-pass release restricted to the reference's ALIDs, with each listed ALID no source
 reaches stored empty. Names follow the two-pass rule (the first rsid of the sites placed
-on each ALID) when the reference names none, and are the reference's, as given, when it
-names some. A manifest of GRCh38 sources alone is routed by identity, as before; Pass 1
-still reads its sources, to say which ALIDs one observed, the only rows with a
-`source_alid` (#261, below). A source declared under any other assembly is refused,
-since neither identity nor the lift places it.
+on each ALID), save that a variant the reference names takes the reference's name (#258,
+below). A manifest of GRCh38 sources alone is routed by identity, as before; Pass 1 still
+reads its sources, for their names and to say which ALIDs one observed, the only rows
+with a `source_alid` (#261, below). A source declared under any other assembly is
+refused, since neither identity nor the lift places it.
 
 A GWAS Catalog row its harmoniser placed nowhere names no variant (#410). In the
 layout that keeps the study's alleles in the main columns, a row whose `hm_code`
@@ -677,7 +679,7 @@ is part of the contract (issue #255):
 - A routing key spells a coordinate's alleles upper-cased, as identity does
   (above), so source coordinates spelt in different case are one stored
   variant on every build. Every build that harvests — a two-pass build, or a
-  single-pass build whose reference names no variants — compares the names
+  single-pass build, whatever its reference names (#258) — compares the names
   those spellings carry, by one rule, and so does Variant Reference extraction
   (issue #379), and so do `build-ragged-ssf` and `build-dense` over the rows
   they admit: when
@@ -705,7 +707,12 @@ is part of the contract (issue #255):
   its distinct names in `(rank, site)` order. A build that compared names and
   found none disputed — even one whose sources name nothing — reports `0` and
   `0`. `n_keys` and `n_variants` are `null`, never `0`, for a build that
-  compared no names across sources: one whose reference names its variants. A
+  compared no names across sources: a release built before #258 from a reference
+  that named its variants, or a resume of a checkpoint that predates the option
+  (below). A variant a disputed key reaches that the reference names keeps the
+  reference's name under `drop` (below), and is not counted in `n_variants`;
+  under `refuse` the dispute still fails the build, since the sources' names are
+  compared whichever name is stored. A
   checkpointed build records the policy and the counts, and resuming it under
   the other policy is refused. A resume past the fold does not harvest again, so
   one whose recorded counts are missing is refused too, unless its checkpoint
@@ -724,8 +731,9 @@ is part of the contract (issue #255):
   that canonicalise to one variant are both dropped, with their associations,
   so no two names ever meet there.
 - A single-pass build given `--variant-reference` MUST NOT write a `rsid`
-  column blank simply because the reference it was given is a plain ALID list.
-  When the reference names none of its variants, the build runs the same Pass 1
+  column blank simply because the reference it was given is a plain ALID list,
+  or names only some of its variants (#258). Whatever the reference names, the
+  build runs the same Pass 1
   harvest the two-pass build runs for its candidates and their `(rank, site)`
   order, keys those candidates with **exactly the key normalisation the build's
   own association routing uses** (alleles upper-cased, allele order kept),
@@ -735,18 +743,32 @@ is part of the contract (issue #255):
   always lands on the ALID its association lands on and the global first
   candidate in `(rank, site)` order wins, whichever partition routed it. Where
   Pass 1's own liftover would have chosen a different ALID, the reference wins
-  and the disagreement is logged. When the reference carries its own rsids (a
-  full `*.variant-ref.tsv.gz` artifact or a Store Variant Table), it is the axis
-  authority and its names are used as given; a variant the reference does not
-  name is then written with no rsid, even when a source names it, and the build
-  warns with counts of the rows it leaves blank (the reference's own unnamed
-  rows and the fold-discovered Overflow rows separately). A reference that
-  already names rsids therefore predates this contract, and no rule below is
-  claimed for that path — an artifact extracted from the same sources names
-  every one of them, which is the supported way to keep a reference-named
-  axis and the sources' identifiers together.
-- For a store whose reference names no rsids, the resulting names are identical
-  to the two-pass build's **for every variant both axes carry**. The axes
+  and the disagreement is logged.
+- **A reference's own names win, and the harvest fills the rest (#258).** When
+  the reference carries rsids (a `*.variant-ref.tsv.gz` artifact or a Store
+  Variant Table), a variant it names MUST be written with the reference's
+  name, whatever its sources call it; the build counts the variants whose
+  sources name them otherwise in a warning, and does not refuse them, since a
+  curated reference may rename. Every variant the reference leaves unnamed —
+  its own unnamed rows, and a Hybrid build's fold-discovered Overflow rows —
+  MUST take the harvest's name by the rule above, exactly as if the reference
+  named nothing. The reference's names are applied to the one rekeyed map, so
+  the Store Variant Table and the rsid search index carry them. An
+  artifact extracted from the same manifest names every variant its sources
+  name, by the same first-name rule, so its names are stored unchanged. The
+  harvest is Pass 1 in full: every source's variants are read, and an hg19
+  source's are lifted with the build's chain under `--liftover-failure-threshold`,
+  so a build against a named reference that passed before #258 can now refuse
+  on that threshold, and a dispute among its sources refuses under `refuse`
+  even at a variant the reference names. It is not cheap: a build that used to
+  read no source pays it, measured on OGS-00004 (nine GWAS-SSF Analyses, 20 M
+  source variants, serial) at about 13.5 min of a 44 min build, some 30 %, and on
+  OGS-00005 at about 7 min of 31. A release built
+  before #258 from a reference that named some rsids wrote every variant it
+  left unnamed with no rsid, even where a source named it.
+- Whatever its reference names, the resulting names are identical to the
+  two-pass build's **for every variant both axes carry**, save that a variant
+  the reference names carries the reference's name. The axes
   themselves need not be identical, and one difference is expected: the
   single-pass axis is the reference plus the off-reference variants its sources
   actually observe, while a two-pass `--reference-panel` axis also keeps a
@@ -756,20 +778,22 @@ is part of the contract (issue #255):
   whose reference has no source keys and whose manifest has an hg19 source
   routes as the two-pass build does (#260, above), so its axis is the
   `--reference-panel` axis, that variant included.
-- A build that harvests (that is, a build whose reference names none of its
-  variants, or a two-pass build) MUST fail rather than publish a variant table
-  that disagrees with the rsids the sources named. Two checks run before
+- A build that harvests (every single-pass build, and a two-pass build) MUST
+  fail rather than publish a variant table that disagrees with the rsids the
+  sources and its reference named. Two checks run before
   publication: the resolved ALID → rsid map is compared exactly with an
-  independently computed expectation — the raw harvest candidates walked
+  independently computed expectation — the reference's own names first, ahead
+  of every source, then the raw harvest candidates walked
   through the build's own key function over the *same final combined* routing,
   first non-empty per ALID, and under `--on-rsid-conflict drop` with every ALID
-  that a routing key it finds named differently reaches expecting no name — so a
+  that a routing key it finds named differently reaches expecting no name unless
+  the reference names it — so a
   wrong value, a missing entry, a key-normalisation collapse that keeps the wrong
-  name, a disputed variant left named, or an extra entry fails;
+  name, a disputed variant left named, a reference name lost or overridden, or
+  an extra entry fails;
   and the written table is read back row for row against that map, so a stale
-  map or a table lost in the write fails too. Neither check runs on the
-  reference-named path above. A release whose sources genuinely name no variants
-  is valid, and builds normally — neither check can fire for it.
+  map or a table lost in the write fails too. A release whose sources genuinely
+  name no variants is valid, and builds normally — neither check can fire for it.
 
 Every Store Release assigns compact Store-local Variant Indices. Variant Indices MUST NOT be assumed stable across releases or stores.
 

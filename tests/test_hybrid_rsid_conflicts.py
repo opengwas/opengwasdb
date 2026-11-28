@@ -398,9 +398,10 @@ def test_swapping_the_sources_changes_no_name(tmp_path, mode, policy):
     assert outcomes == [expected, expected]
 
 
-def test_build_that_reads_no_source_names_reports_no_count(tmp_path):
-    """A reference that names its variants is used as given and no source
-    name is compared, so the count is unknown (null), not zero."""
+def test_a_named_reference_reports_the_harvests_count(tmp_path):
+    """A reference that names its variants still has its sources' names compared
+    (#258), so the count is the harvest's: zero here, not the null of a comparison
+    never made."""
     source = _write_ssf(tmp_path / "upper.tsv.gz", [("1", 100000, "A", "G", 0.5, 0.1, "rs1")])
     manifest = _manifest(tmp_path, [("upper", source)])
     named = tmp_path / "named.variant-ref.tsv.gz"
@@ -414,7 +415,7 @@ def test_build_that_reads_no_source_names_reports_no_count(tmp_path):
 
     assert _hybrid_axis_rsids(store)[CONFLICT_ON] == "rs1"
     assert result.rsid_conflicts.as_dict() == {
-        "policy": "refuse", "n_keys": None, "n_variants": None, "sample": []
+        "policy": "refuse", "n_keys": 0, "n_variants": 0, "sample": []
     }
 
 

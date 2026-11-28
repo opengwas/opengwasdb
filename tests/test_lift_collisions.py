@@ -18,7 +18,6 @@ from lift_collision_fixtures import (
     COLLIDED,
     LEDGER,
     ROWS,
-    UNNAMED_LEDGER,
     named_row,
 )
 from liftover_fixtures import vcf_manifest, write_collision_chain
@@ -81,13 +80,25 @@ def test_hybrid_single_pass_on_a_plain_list_counts_collided_rows_in_pass_2(tmp_p
     _check_record(store)
 
 
-def test_hybrid_fold_counts_collided_off_reference_rows(tmp_path):
-    """A reference that routes 1501 alone and names its rsids harvests nothing, so only
-    the fold lifts 501 and 1001; it finds them colliding and drops both. No source was
-    read for names, so the ledger names each by its key alone."""
+def test_a_named_reference_drops_collided_off_reference_rows_in_pass_2(tmp_path):
+    """A reference that routes 1501 alone and names its rsid still has its sources
+    harvested (#258); the harvest's lift finds 501 and 1001 colliding, so Pass 2 drops
+    both (its stage, not the fold's), and the ledger names each by the rsid its own
+    source gave it (#325's review: it wrote them blank under a named reference)."""
     store = _hybrid_fold(tmp_path)
     assert _alids(store) == {CLEAN}
-    _check_record(store, stage="fold", ledger=UNNAMED_LEDGER)
+    _check_record(store)  # Pass 2's log, `<analysis>.tsv.gz`
+    folded = sorted((admission_record_for(store) / "dropped").glob("*.fold.tsv.gz"))
+    assert all(
+        "lift_collision" not in line for path in folded for line in _logged_file(path)
+    ), "the fold dropped a row Pass 2 should have"
+
+
+def _logged_file(path: Path) -> list[str]:
+    import gzip
+
+    with gzip.open(path, "rt") as fh:
+        return fh.read().splitlines()[1:]
 
 
 def test_ragged_ssf_drops_both_sources_and_counts_them_as_collisions(tmp_path):
@@ -213,13 +224,30 @@ def _hybrid_fold(tmp_path: Path, **options) -> Path:
     return store
 
 
+def _pass_2_misses_the_collisions(patch: pytest.MonkeyPatch) -> None:
+    """Make Pass 2 spill the rows the harvest found colliding, so the fold meets them.
+
+    Every Variant Reference is harvested (#258), so Pass 2 drops them by key and no
+    build reaches the fold's own collision resolution; this is the one way to test
+    that guard and what it records."""
+    from opengwasdb.layouts.hybrid import build as hybrid_build
+
+    real = hybrid_build._resolve_column_hybrid
+
+    def _unguarded(table, row, gate, axes, folds, off_primary, _lift_collided):
+        return real(table, row, gate, axes, folds, off_primary, frozenset())
+
+    patch.setattr(hybrid_build, "_resolve_column_hybrid", _unguarded)
+
+
 def test_a_fold_interrupted_after_its_axis_is_recorded_resumes_with_the_ledger(
     tmp_path, monkeypatch
 ):
     """The axis is resumable once recorded; the identities of what the fold dropped must
     be recorded with it, or a resumed fold counts the drops and never names them. The
     fold itself is interrupted, and the ledger is deleted, so nothing written before can
-    stand in for what the resume restores."""
+    stand in for what the resume restores. The fold names each source by the rsid the
+    harvest found, though the reference names rsids of its own (#258; #325's review)."""
     from opengwasdb.layouts.hybrid import build as hybrid_build
     from opengwasdb.layouts.hybrid.build import resume_hybrid_build
     from opengwasdb.layouts.hybrid.checkpoint import checkpoint_dir_for
@@ -228,6 +256,7 @@ def test_a_fold_interrupted_after_its_axis_is_recorded_resumes_with_the_ledger(
         raise RuntimeError("interrupted in the fold")
 
     with monkeypatch.context() as patch:
+        _pass_2_misses_the_collisions(patch)
         patch.setattr(hybrid_build, "_fold_column", _interrupted)
         with pytest.raises(RuntimeError, match="interrupted in the fold"):
             _hybrid_fold(tmp_path, checkpoint=True)
@@ -238,7 +267,7 @@ def test_a_fold_interrupted_after_its_axis_is_recorded_resumes_with_the_ledger(
 
     resume_hybrid_build(checkpoint)
 
-    _check_record(store, stage="fold", ledger=UNNAMED_LEDGER)
+    _check_record(store, stage="fold")
 
 
 def _hybrid_unnamed_reference(tmp_path: Path, vcfs: dict, assembly) -> Path:

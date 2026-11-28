@@ -62,6 +62,7 @@ from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation import validate_store
+from opengwasdb.variants.reference import read_variant_reference
 
 HG19_POS_1 = 100_000
 HG19_POS_2 = 1_000_000
@@ -1554,9 +1555,9 @@ class TestVariantReference:
 
     def test_logs_single_pass(self, tmp_path, caplog):
         """A reference that names no rsids still logs the single-pass axis, and
-        logs the Pass 1 harvest it runs for identifiers (issue #255); a
-        reference that carries rsids is used as-is (covered by
-        ``TestVariantReferenceRsids.test_reference_that_names_rsids_skips_the_harvest``)."""
+        logs the Pass 1 harvest it runs for identifiers (issue #255), as one
+        that carries rsids does (#258, covered by
+        ``TestVariantReferenceRsids.test_the_references_names_win_over_the_sources``)."""
         import logging
 
         manifest = _hybrid_manifest(tmp_path)
@@ -1569,9 +1570,9 @@ class TestVariantReference:
             )
 
         assert "Single-pass build: variant axis loaded from" in caplog.text
-        # The fixture's VCF IDs are '.', so the artifact carries no rsids and
-        # the harvest runs.
-        assert "reference names no rsids; Pass 1 harvest resolved" in caplog.text
+        # The fixture's VCF IDs are '.', so the artifact carries no rsids; the
+        # harvest runs either way (#258).
+        assert "Pass 1 harvest resolved" in caplog.text
 
     def test_off_reference_variant_that_fails_liftover_is_dropped(self, tmp_path):
         """A failed off-reference lift is dropped under the threshold -- it must
@@ -2481,14 +2482,10 @@ class TestVariantReferenceRsids:
         with query_store(two_pass) as query:
             assert len(query.lookup([alid], ["first", "second"])["z"]) == 2
 
-    def test_named_reference_leaves_unnamed_variants_blank(self, tmp_path, caplog):
-        """Issue #255, round 4 finding 3, a scope ruling rather than a fix: a
-        reference that already names rsids is used as-is, so a variant it does
-        not name stays blank even when a source names it -- its own unnamed
-        rows and the fold-discovered Overflow rows alike. The build warns with
-        counts on both; the two-pass build names them."""
-        import logging
-
+    def _named_reference_fixture(self, tmp_path):
+        """The #255 round-4 reviewer's fixture: an artifact naming only
+        ``1:100000:A:G -> rsPANEL``, the name the source gives it, over a source that
+        also names a reference row the artifact leaves unnamed and an Overflow row."""
         vcf = make_vcf(
             tmp_path,
             "named",
@@ -2503,6 +2500,18 @@ class TestVariantReferenceRsids:
         panel.write_text(f"{HG38_ALID_1}\n{HG38_ALID_3}\n", encoding="utf-8")
         reference = tmp_path / "named.variant-ref.tsv.gz"
         write_hg38_artifact(reference, [HG38_ALID_1, HG38_ALID_3], {HG38_ALID_1: "rsPANEL"})
+        assert read_variant_reference(reference).rsid_by_alid == {HG38_ALID_1: "rsPANEL"}, (
+            "fixture: the reference names one of its two rows"
+        )
+        return manifest, panel, reference
+
+    def test_named_reference_fills_the_rows_it_leaves_unnamed(self, tmp_path, caplog):
+        """Issue #258 (Fill): a reference that names some rsids no longer leaves the
+        rest blank. The harvest still runs and names the reference's own unnamed row
+        and the fold-discovered Overflow row, as the two-pass build does."""
+        import logging
+
+        manifest, panel, reference = self._named_reference_fixture(tmp_path)
         two_pass = tmp_path / "named-two.opengwasdb"
         single_pass = tmp_path / "named-one.opengwasdb"
         build_hybrid_from_vcf_manifest(
@@ -2514,20 +2523,35 @@ class TestVariantReferenceRsids:
                 store_id="s", release_id="r",
             )
 
-        assert _hybrid_axis_rsids(two_pass) == {
-            HG38_ALID_1: "rsPANEL",
-            HG38_ALID_3: "rsUNNAMED_REF",
-            HG38_ALID_4: "rsOFF",
-        }
-        assert _hybrid_axis_rsids(single_pass) == {
-            HG38_ALID_1: "rsPANEL",
-            HG38_ALID_3: "",
-            HG38_ALID_4: "",
-        }
+        expected = {HG38_ALID_1: "rsPANEL", HG38_ALID_3: "rsUNNAMED_REF", HG38_ALID_4: "rsOFF"}
+        assert _hybrid_axis_rsids(two_pass) == expected
+        assert _hybrid_axis_rsids(single_pass) == expected
         assert result.n_overflow == 1
         assert validate_store(single_pass).ok
-        assert "names 1 of its 2 ALIDs and leaves 1 blank" in caplog.text
-        assert "off-reference (Overflow) variant(s)" in caplog.text
+        assert "stored with no rsid" not in caplog.text
+
+    def test_a_lost_filled_name_fails_the_build(self, tmp_path, monkeypatch):
+        """The value oracle covers a named reference's fill: a rekey that loses the
+        name it fills for the reference's own unnamed row fails the build (#258)."""
+        from opengwasdb.variants.routing import names
+
+        manifest, panel, reference = self._named_reference_fixture(tmp_path)
+        real_rekey = names._rekey_rsids_to_alids
+        dropped: list[str] = []
+
+        def _drop_the_filled_entry(source_lookup, rsid_by_site):
+            rekeyed = real_rekey(source_lookup, rsid_by_site)
+            if rekeyed.pop(HG38_ALID_3, None) is not None:
+                dropped.append(HG38_ALID_3)
+            return rekeyed
+
+        monkeypatch.setattr(names, "_rekey_rsids_to_alids", _drop_the_filled_entry)
+        with pytest.raises(ValueError, match="disagrees with the routed harvest"):
+            build_hybrid_from_vcf_manifest(
+                manifest, tmp_path / "lost.opengwasdb", variant_reference=reference,
+                reference_panel=panel, store_id="s", release_id="r",
+            )
+        assert dropped, "the fault never reached the filled name"
 
     def test_admission_rejected_row_still_names_its_variant(self, tmp_path):
         """Hybrid admission (a MAF threshold here) runs inside Pass 2, after the
@@ -2594,9 +2618,10 @@ class TestVariantReferenceRsids:
                 store_id="s", release_id="r",
             )
 
-    def test_reference_that_names_rsids_skips_the_harvest(self, tmp_path, caplog):
-        """A reference carrying its own rsids is used as-is: no source read is
-        spent, and the reference's names are what the table carries."""
+    def test_the_references_names_win_over_the_sources(self, tmp_path, caplog):
+        """A reference carrying its own rsids still has the sources harvested (#258),
+        and where it names a variant its name is stored, whatever the sources call it.
+        The build counts the variants the two name differently."""
         import logging
 
         from opengwasdb.variants.reference import write_variant_reference
@@ -2623,7 +2648,8 @@ class TestVariantReferenceRsids:
             )
 
         assert _hybrid_axis_rsids(store) == {HG38_ALID_1: "rsCURATED"}
-        assert "Pass 1 harvest resolved" not in caplog.text
+        assert "Pass 1 harvest resolved" in caplog.text
+        assert "1 variant(s) the Variant Reference names differently" in caplog.text
 
     def test_sources_with_no_rsids_still_build(self, tmp_path):
         """The rule cannot fire falsely: a source that names no rsids builds a

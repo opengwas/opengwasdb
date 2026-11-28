@@ -31,5 +31,3 @@ LEDGER = [
     f"{COLLIDED}\t1:501:A:G\trs_first",
     f"{COLLIDED}\t1:1001:A:G\trs_second",
 ]
-#: The ledger a build that harvests no rsid writes: the sources by their keys alone.
-UNNAMED_LEDGER = [line.rsplit("\t", 1)[0] + "\t" for line in LEDGER]
