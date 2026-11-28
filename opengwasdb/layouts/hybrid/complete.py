@@ -46,6 +46,7 @@ from opengwasdb.completion.manifest import PANEL_FIELDS, panel_fields
 from opengwasdb.completion.options import DEFAULT_OPTIONS, CompletionOptions
 from opengwasdb.completion.reference_eaf import completed_eaf_scope
 from opengwasdb.completion.schema import CompletionQualityRollup
+from opengwasdb.completion.se_exceptions import corrected_se_exception_record, report_se_exceptions
 from opengwasdb.completion.se_out_of_range import PROVENANCE_KEY as SE_OUT_OF_RANGE_KEY
 from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts, counted
 from opengwasdb.encoding.association_codec import (
@@ -57,6 +58,7 @@ from opengwasdb.encoding.association_codec import (
 )
 from opengwasdb.encoding.planes import write_dense_cells
 from opengwasdb.encoding.sd_units import PhenotypeSd
+from opengwasdb.encoding.se_counts import SeExceptionCounts
 from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes as build_dense_top_hit_indexes
@@ -359,17 +361,7 @@ def _remap_shared_axis(
     )
     folded, left_out = _stored_crossovers(overflow, is_crossover)
     n_reclaimed_imputed = _publish_crossover_totals(dense, overflow, overflow_alids, folded, src)
-    _fold_panel_crossovers(
-        dense.dir,
-        dense.alid_to_row,
-        overflow.offsets,
-        overflow.z,
-        overflow.se,
-        overflow.eaf,
-        overflow_alids,
-        folded,
-        dense_encoding=dense.encoding,
-    )
+    _fold_and_recount(dense, overflow, overflow_alids, folded)
     _count_left_out_crossovers(dense.dir, left_out)
     n_imputed = dense.n_imputed - n_reclaimed_imputed
     if is_crossover.any():
@@ -580,6 +572,60 @@ def _crossover_status(
     )
 
 
+def _fold_and_recount(
+    dense: _CompletedDense, overflow: _SourceOverflow, alids: np.ndarray, folded: np.ndarray
+) -> None:
+    """Fold the crossovers in, and bring the `se_exceptions` record to the final cells."""
+    overwritten = _overwritten_se_counts(dense, overflow, alids, folded)
+    fold_counts = _fold_panel_crossovers(
+        dense.dir,
+        dense.alid_to_row,
+        overflow.offsets,
+        overflow.z,
+        overflow.se,
+        overflow.eaf,
+        alids,
+        folded,
+        dense_encoding=dense.encoding,
+    )
+    _publish_crossover_se_exceptions(dense, overwritten, fold_counts)
+
+
+def _overwritten_se_counts(
+    dense: _CompletedDense, overflow: _SourceOverflow, alids: np.ndarray, crossed: np.ndarray,
+) -> SeExceptionCounts | None:
+    """The SE codes of the Dense cells the fold is about to replace, counted as the
+    Dense pass counted them; read before the fold writes. None for a plane with no
+    residual SE, which keeps no exception record."""
+    selected = np.flatnonzero(crossed)
+    if not dense.encoding.se.is_residual or not len(selected):
+        return None
+    rows = np.asarray([dense.alid_to_row[alid] for alid in alids[selected]], dtype=np.int64)
+    analyses = np.searchsorted(overflow.offsets[1:], selected, side="right")
+    root = open_store(dense.dir).arrays(mode="r")
+    counts = SeExceptionCounts.zeros(overflow.n_analyses)
+    counts.add(root["se"].vindex[rows, analyses], analyses, root["imputed"].vindex[rows, analyses])
+    return counts
+
+
+def _publish_crossover_se_exceptions(
+    dense: _CompletedDense, overwritten: SeExceptionCounts | None,
+    folded: SeExceptionCounts | None,
+) -> None:
+    """The Dense Component's `se_exceptions` record counts the release's final cells:
+    the Dense pass's less the cells the fold overwrote, plus the fold's own (#390),
+    as `_publish_crossover_totals` does for the imputed totals (#362)."""
+    if overwritten is None or folded is None:
+        return
+    store = open_store(dense.dir)
+    provenance = dict(store.manifest.provenance)
+    completion = provenance["completion"]
+    record = corrected_se_exception_record(completion["se_exceptions"], overwritten, folded)
+    report_se_exceptions(record, where="complete-hybrid")
+    provenance["completion"] = {**completion, "se_exceptions": record}
+    StagedRelease(dense.dir).write_manifest(replace(store.manifest, provenance=provenance))
+
+
 # ── Phase 3: shared tables + overflow rebuild ───────────────────────────────
 
 
@@ -777,7 +823,7 @@ def _fold_panel_crossovers(
     overflow_alids: np.ndarray,
     is_crossover: np.ndarray,
     dense_encoding: StoreEncoding,
-) -> None:
+) -> SeExceptionCounts | None:
     """Write every crossover association's real observed value into the
     completed Dense Component at ``(dense_row, analysis)``, marked
     ``imputed=0``, in place of whatever dense completion computed there.
@@ -787,11 +833,10 @@ def _fold_panel_crossovers(
     ``src_se``/``src_eaf``); ``offsets`` partitions that flat array by analysis, exactly
     as the sequence's own ``offsets`` array does. The totals of what it overwrites are
     `_publish_crossover_totals`', read before this writes -- see the module docstring
-    (issue #99).
+    (issue #99). Returns the SEs it wrote, per Analysis, for a residual SE (#390).
     """
     if not is_crossover.any():
-        return
-
+        return None
     n_analyses = len(offsets) - 1
     assoc_ai = np.repeat(np.arange(n_analyses), np.diff(offsets))
     crossover_idx = np.flatnonzero(is_crossover)
@@ -822,9 +867,23 @@ def _fold_panel_crossovers(
         ),
         Placement.pairs(row_idx, col_idx, int(root["z"].shape[1])),
         where="complete-hybrid, a crossover fold",
+        # Observations decoded from the Ragged source: exact under this plan too (#390).
+        carried=np.ones(len(row_idx), dtype=bool),
     )
     _refuse_unjudged_crossovers(encoded.storable.se_out_of_range)
     write_dense_cells(root, dense_encoding, row_idx, col_idx, encoded)
+    return _fold_se_counts(encoded.se, col_idx, n_analyses, dense_encoding)
+
+
+def _fold_se_counts(
+    codes: np.ndarray, analyses: np.ndarray, n_analyses: int, encoding: StoreEncoding
+) -> SeExceptionCounts | None:
+    """The SEs the fold wrote, per Analysis, as observed cells; None without a residual SE."""
+    if not encoding.se.is_residual:
+        return None
+    counts = SeExceptionCounts.zeros(n_analyses)
+    counts.add(codes, analyses, np.zeros(len(analyses), dtype=np.uint8))
+    return counts
 
 
 def _refuse_unjudged_crossovers(left_out: np.ndarray) -> None:

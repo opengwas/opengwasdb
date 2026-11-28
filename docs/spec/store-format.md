@@ -1078,22 +1078,30 @@ components share one decision, and each must save bytes on its own.
 **Reference Completion keeps its source's SE model** (ADR 0078, issue #301).
 A completed release declares its source's `kind` and `residual_range` (ADR
 0038 §4), and every cell it holds is coded against the source's
-`se_coefficients`, which it carries unchanged. Dense and Hybrid completion
-patch the source's plane, so its codes carry over. Ragged completion rewrites
-its whole CSR plane from decoded values, and it never refits the model: a
+`se_coefficients`, which it carries unchanged. Every layout re-encodes each
+observed cell from its decoded source value, and never refits the model: a
 model fitted to the completed rows decodes each observed code to a value the
 source never held. Each observed cell is held exactly: its code decodes to the
 source's value, and one whose code would decode to anything else is an exact
 exception. For example, a source exception whose `float32` value rounds back
 inside the range stays an exception. So the source's exceptions carry over
-with their values. An imputed cell is coded against the same model, and one
+with their values. The rule is the same for a residual `eaf` plane (issue #390):
+an observed frequency whose code would decode, by the one EAF decoder, to a
+`float32` other than the source's is an exact exception in `eaf_exception_*`,
+and one already on a code's value keeps the code, so the exceptions a
+completion adds are the cells the source's own exceptions put off the grid. A
+Hybrid crossover fold is not like that: it codes the Ragged Overflow's observation
+against the Dense Component's baseline and model, not the Ragged source's, so a
+crossover that was an ordinary code under the source's is usually off the grid
+under the Component's, and most folded cells become exceptions. The fold carries
+them (the same rule), so each reads back as the source did. An imputed cell is coded against the same model, and one
 whose residual falls outside the range is an exact exception, like any other.
 
 The 2% budget is the criterion a build uses to choose its range, and
 completion does not choose again. Imputed cells may take an Analysis past
 2%. Completion never brings it back under by refitting or by writing
 `float16`: either would change observed values that §12 says completion
-preserves. Instead a Ragged completion records each Analysis's share in
+preserves. Instead a Ragged, Dense or Hybrid completion (Hybrid in its Dense Component's manifest, counting the release's final cells: the Dense pass less the cells the crossover fold overwrote, plus the fold's own; issue #390) records each Analysis's share in
 `manifest.json`'s `provenance.completion.se_exceptions` and logs a warning
 naming every Analysis above the budget. `validate` does not check the budget:
 it bounds side-table bytes, not accuracy. The block holds:

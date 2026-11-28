@@ -138,6 +138,7 @@ COMPLIANT_ARRAYS_CALLS = frozenset(
         ("opengwasdb/layouts/dense/complete.py", "_dense_shard_rows"),
         ("opengwasdb/layouts/dense/rho.py", "build_dense_rho"),
         ("opengwasdb/layouts/hybrid/complete.py", "_crossover_status"),
+        ("opengwasdb/layouts/hybrid/complete.py", "_overwritten_se_counts"),
         ("opengwasdb/store/legacy_conversion.py", "_grid"),
         ("opengwasdb/store/legacy_conversion.py", "_rounded_se"),
         ("opengwasdb/store/legacy_conversion.py", "_refuse_other_planes"),

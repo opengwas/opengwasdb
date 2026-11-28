@@ -72,6 +72,7 @@ from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.regions import analysis_regions, inside, region_blocks
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
+from opengwasdb.completion.se_exceptions import report_se_exceptions, se_exception_record
 from opengwasdb.completion.se_out_of_range import PROVENANCE_KEY as SE_OUT_OF_RANGE_KEY
 from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts
 from opengwasdb.encoding.association_codec import log_se_out_of_range
@@ -82,7 +83,6 @@ from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import (
     RaggedCSRWriter,
     ReferenceCompletion,
-    SeExceptionCounts,
 )
 from opengwasdb.model.analyses import (
     Analysis,
@@ -100,7 +100,7 @@ from opengwasdb.store.open import (
     open_store,
 )
 from opengwasdb.store_reader.associations import Associations, Cells, CsrReader
-from opengwasdb.store_reader.encoding.plan import SE_EXCEPTION_BUDGET, StoreEncoding
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.stored import eaf_baseline, se_coefficients, sequence_arrays
 from opengwasdb.store_reader.variant_axis import VariantRecord
@@ -1413,68 +1413,6 @@ def _encode_plan(
     )
 
 
-def _se_exception_record(counts: SeExceptionCounts, analysis_ids: list[str]) -> dict[str, Any]:
-    """Each Analysis's share of SEs held as exact exceptions, in `analyses.tsv`
-    order, and the Analyses above the 2% budget (spec §6a, issue #301).
-
-    The budget is a build's criterion for choosing a residual range. Completion
-    keeps its source's range and model, so it measures the share it produced
-    rather than enforcing it: the record and `_report_se_exceptions` are how a
-    breach by imputed cells becomes visible. An Analysis with no SE has no
-    share, recorded as null rather than 0. The writer counts as it codes each
-    region (`SeExceptionCounts`).
-    """
-    n_se, n_exceptions = counts.n_se.tolist(), counts.n_exceptions.tolist()
-    rates = [
-        exact / n if n else None for exact, n in zip(n_exceptions, n_se, strict=True)
-    ]
-    analyses = [
-        {
-            "analysis_id": analysis_id,
-            "n_se": int(n_se[i]),
-            "n_exceptions": int(n_exceptions[i]),
-            "n_imputed_se": int(counts.n_imputed_se[i]),
-            "n_imputed_exceptions": int(counts.n_imputed_exceptions[i]),
-            "exception_rate": rates[i],
-        }
-        for i, analysis_id in enumerate(analysis_ids)
-    ]
-    over = [
-        analysis_id
-        for analysis_id, rate in zip(analysis_ids, rates, strict=True)
-        if rate is not None and rate > SE_EXCEPTION_BUDGET
-    ]
-    return {"budget": SE_EXCEPTION_BUDGET, "analyses": analyses, "over_budget": over}
-
-
-def _report_se_exceptions(record: dict[str, Any]) -> None:
-    """The exception tally on the console, and each Analysis over budget by name."""
-    analyses = record["analyses"]
-    total = sum(entry["n_exceptions"] for entry in analyses)
-    imputed = sum(entry["n_imputed_exceptions"] for entry in analyses)
-    cells = sum(entry["n_se"] for entry in analyses)
-    print(
-        f"SE exceptions: {total:,} of {cells:,} SEs ({imputed:,} on imputed cells); "
-        f"{len(record['over_budget']):,} Analyses over the {record['budget']:.0%} budget"
-    )
-    over = [entry for entry in analyses if entry["analysis_id"] in set(record["over_budget"])]
-    if not over:
-        return
-    log.warning(
-        "complete-ragged: %s Analyses hold more than %s of their SEs as exact exceptions, "
-        "the residual budget (spec §6a); the source's SE model and range are kept, never "
-        "refitted or narrowed to float16 (issue #301): %s",
-        f"{len(over):,}",
-        f"{record['budget']:.0%}",
-        "; ".join(
-            f"{entry['analysis_id']}: {entry['exception_rate']:.2%} "
-            f"({entry['n_exceptions']:,} of {entry['n_se']:,}, "
-            f"{entry['n_imputed_exceptions']:,} imputed)"
-            for entry in over
-        ),
-    )
-
-
 def _write_completed_zarr(
     staged: StagedRelease,
     encode_plan: _EncodePlan,
@@ -1521,10 +1459,10 @@ def _write_completed_zarr(
     se_exceptions = (
         None
         if counts is None
-        else _se_exception_record(counts, [analysis.analysis_id for analysis in analyses])
+        else se_exception_record(counts, [analysis.analysis_id for analysis in analyses])
     )
     if se_exceptions is not None:
-        _report_se_exceptions(se_exceptions)
+        report_se_exceptions(se_exceptions, where="complete-ragged")
     print("Building variant-centric index...")
     build_variant_index(staged.path, n_axis=n_variants)
     return se_exceptions

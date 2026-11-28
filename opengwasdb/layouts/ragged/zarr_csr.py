@@ -41,6 +41,7 @@ from opengwasdb.encoding.codec import (
 from opengwasdb.encoding.memory import EXCEPTION_CELLS_PER_RESULT_BYTE, pool_workers
 from opengwasdb.encoding.planes import write_se_coefficients
 from opengwasdb.encoding.sd_units import PhenotypeSd
+from opengwasdb.encoding.se_counts import SeExceptionCounts
 from opengwasdb.model.analyses import Analysis, with_se_out_of_range
 from opengwasdb.store import arrays as store_arrays
 from opengwasdb.store_reader import layout as store_layout
@@ -53,8 +54,6 @@ from opengwasdb.store_reader.encoding.codec import (
 )
 from opengwasdb.store_reader.encoding.plan import (
     N_MISSING,
-    SE_EXCEPTION,
-    SE_MISSING,
     EafMeasurements,
     SeEncoding,
     SeMeasurements,
@@ -104,38 +103,6 @@ def sequence_region_step(total: int, region_cells: int) -> int:
     )
     shards_per_region = max(1, -(-max(1, int(region_cells)) // shard))
     return shards_per_region * shard
-
-
-@dataclass(frozen=True)
-class SeExceptionCounts:
-    """Per Analysis, the SEs a residual plane holds and those it holds as exact
-    exceptions (spec §6a), each also counted among the imputed cells alone.
-
-    What a Reference Completion records against the 2% exception budget, which
-    it reports rather than enforces (issue #301): counted as each region's codes
-    are written, so no pass over the plane is needed to know them.
-    """
-
-    n_se: np.ndarray
-    n_exceptions: np.ndarray
-    n_imputed_se: np.ndarray
-    n_imputed_exceptions: np.ndarray
-
-    @classmethod
-    def zeros(cls, n_analyses: int) -> SeExceptionCounts:
-        return cls(*(np.zeros(n_analyses, dtype=np.int64) for _ in range(4)))
-
-    def add(self, codes: np.ndarray, analysis_index: np.ndarray, imputed: np.ndarray) -> None:
-        """Count one region's codes, in place."""
-        held, exact, flagged = codes != SE_MISSING, codes == SE_EXCEPTION, imputed == 1
-        n = len(self.n_se)
-        for total, mask in (
-            (self.n_se, held),
-            (self.n_exceptions, exact),
-            (self.n_imputed_se, held & flagged),
-            (self.n_imputed_exceptions, exact & flagged),
-        ):
-            total += np.bincount(analysis_index[mask], minlength=n)
 
 
 @dataclass(frozen=True, eq=False)
@@ -715,7 +682,7 @@ class RaggedCSRWriter:
             root, encoding, imputed=root["imputed"] if "imputed" in root else None
         )
         counts = SeExceptionCounts.zeros(self.n_analyses)
-        carried = self._completion is not None
+        carried = self._carries_observed
         for lo, hi in self._flat_regions(self.n_associations, region_cells):
             analyses = self._region_analysis_indices(offsets, lo, hi)
             imputed = self._gather_imputed(offsets, lo, hi)
@@ -795,6 +762,7 @@ class RaggedCSRWriter:
         )
         z_overflow = ZOverflowBuilder()
         eaf_exceptions = EafExceptionBuilder()
+        carried = self._carries_observed
         for lo, hi in self._flat_regions(total, region_cells):
             indices, scores, _errors, frequencies = self._gather_region(offsets_arr, lo, hi)
             variant_index[lo:hi] = indices
@@ -807,6 +775,7 @@ class RaggedCSRWriter:
                     baseline=None if baseline is None else baseline[indices],
                     positions=positions_flat(lo),
                     exceptions=eaf_exceptions,
+                    exact=self._gather_imputed(offsets_arr, lo, hi) == 0 if carried else None,
                 )
         write_exact_table(z_overflow.table(), root, role=ArrayRole.RAGGED_EXCEPTION_TABLE)
         if encoding.eaf.is_residual:
@@ -1031,7 +1000,7 @@ class RaggedCSRWriter:
                 se_coefficients=se_coefficients,
             ),
             baseline=baseline,
-            carried=self._completion is not None,
+            carried=self._carries_observed,
         )
 
     def _region_planes(self, encoding: StoreEncoding, codec: StoreCodec) -> dict[str, Any]:
@@ -1134,6 +1103,12 @@ class RaggedCSRWriter:
     def _gather_n(self, offsets: np.ndarray, lo: int, hi: int) -> np.ndarray:
         """The `n` codes for flat cells `[lo, hi)`; missing for an Analysis given none."""
         return self._gather_held(self._ns, offsets, lo, hi, N_MISSING, np.uint32)
+
+    @property
+    def _carries_observed(self) -> bool:
+        """A completion's observed cells keep the value their source decodes to, as an
+        exact exception where no code reaches it (#301, #390)."""
+        return self._completion is not None
 
     def _gather_imputed(self, offsets: np.ndarray, lo: int, hi: int) -> np.ndarray:
         """The imputed flags for flat cells `[lo, hi)`; 0 for an Analysis given none."""
@@ -1249,13 +1224,7 @@ class _RegionTables:
         self.z_overflow.append(outcome.tables.z_overflow)
         self.eaf_exceptions.append(outcome.tables.eaf_exceptions)
         self.se_exceptions.append(outcome.tables.se_exceptions)
-        for total, part in (
-            (self.counts.n_se, outcome.se_counts.n_se),
-            (self.counts.n_exceptions, outcome.se_counts.n_exceptions),
-            (self.counts.n_imputed_se, outcome.se_counts.n_imputed_se),
-            (self.counts.n_imputed_exceptions, outcome.se_counts.n_imputed_exceptions),
-        ):
-            total += part
+        self.counts.merge(outcome.se_counts)
 
 
 def _write_region(plan: _RegionPlan, region: tuple[int, int]) -> _RegionOutcome:

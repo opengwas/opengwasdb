@@ -382,9 +382,9 @@ class AssociationCodec:
         Store and its fills -- so their SEs are in SD Units already and are
         judged with `PhenotypeSd.APPLIED`: encoding never standardises (ADR 0084).
 
-        `carried` marks cells decoded from another Store, whose SE must decode
-        to exactly the value given: Ragged completion's observed cells (issue
-        #301). Under a residual SE plan a carried cell whose code would decode
+        `carried` marks cells decoded from another Store, whose SE and EAF must
+        decode to exactly the value given: a completion's observed cells (issues
+        #301, #390). Under a residual plan a carried cell whose code would decode
         to anything else is an exact exception.
 
         No I/O and deterministic. Raises `NotAdmitted` (`storable`),
@@ -403,7 +403,7 @@ class AssociationCodec:
         z_overflow = ZOverflowBuilder()
         z = self._codec.encode_z(values.z, positions=at.positions, overflow=z_overflow)
         eaf_exceptions = EafExceptionBuilder()
-        eaf = self._encode_eaf(values, at, eaf_exceptions, where)
+        eaf = self._encode_eaf(values, at, eaf_exceptions, where, carried)
         se_exceptions = SeExceptionBuilder()
         se = self._encode_se(values, at, eaf, eaf_exceptions, se_exceptions, carried)
         imputed = None if values.imputed is None else np.asarray(values.imputed, dtype=np.uint8)
@@ -436,7 +436,12 @@ class AssociationCodec:
     # ── the planes, in order ────────────────────────────────────────────────
 
     def _encode_eaf(
-        self, values: CellValues, at: Placement, exceptions: EafExceptionBuilder, where: str
+        self,
+        values: CellValues,
+        at: Placement,
+        exceptions: EafExceptionBuilder,
+        where: str,
+        carried: np.ndarray | None = None,
     ) -> np.ndarray | None:
         if values.eaf is None:
             return None
@@ -453,6 +458,7 @@ class AssociationCodec:
             baseline=self._per_cell(self._baseline, at, np.shape(values.eaf)),
             positions=at.positions,
             exceptions=exceptions,
+            exact=carried,
         )
 
     def _encode_se(
