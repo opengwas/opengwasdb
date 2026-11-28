@@ -211,7 +211,6 @@ from opengwasdb.variants.routing import (
     collapse_duplicates,
     route_variants,
 )
-from opengwasdb.variants.routing.keys import raw_site_key
 from opengwasdb.variants.routing.lift import DroppedSource, LiftDrops
 from opengwasdb.variants.rsid import RsidConflictPolicy, RsidConflicts
 
@@ -603,8 +602,8 @@ class _SourceAxis:
     partition: _VariantPartition
     analyses: list[Analysis]
     hg38_to_source: dict[str, str | None]
-    #: The names routing resolved; pending when a reference that names none was
-    #: harvested and the fold still has off-reference keys to route (issue #255).
+    #: The names routing resolved; pending when a reference was harvested and the
+    #: fold still has off-reference keys to route (issues #255, #258).
     names: RoutedNames
     table: RouteTable
     #: The routing keys of the sites a lift placed off the primary assembly (#376).
@@ -635,9 +634,7 @@ class _PreparedBuild:
     hg38_to_source: dict[str, str | None]
     #: The routed names and what the sources disputed (issue #306). Pending,
     #: from a single-pass harvest, until the fold routes the off-reference keys
-    #: (issue #255); `reference_named` says the reference supplied its own
-    #: names and the sources were not read, so the build only warns about what
-    #: it leaves blank.
+    #: (issue #255), whether or not the reference names rsids of its own (#258).
     names: RoutedNames
     dense_to_shared: np.ndarray
     spill_dir: Path
@@ -963,8 +960,8 @@ def _lift_and_partition(
     routing, panel_alids = _route(manifest_rows, options)
     if routing.names.pending:
         log.info(
-            "Single-pass build: reference names no rsids; Pass 1 harvest resolved %d "
-            "on-reference rsid(s)",
+            "Single-pass build: Pass 1 harvest resolved %d on-reference rsid(s), the "
+            "reference's own names winning",
             len(routing.names.rsid_by_alid),
         )
     hg38_to_source = routing.source_alids()
@@ -1791,38 +1788,14 @@ def _merge_off_reference_rsids(
     composed from the associations the build stores, while the two-pass axis
     keeps every source variant. The names are identical for every variant both
     axes carry (spec §4).
+
+    A fold runs only under a Variant Reference, whose names are always harvested
+    (#258), so they are pending here; `RoutedNames.finish` refuses final ones
+    rather than leave an Overflow row unnamed in silence.
     """
-    names = prepared.names
-    if not names.pending:
-        _warn_fold_left_rows_blank(prepared, fold)
-        return prepared
     # The shared table, the one that names a row (#472), is written from the
     # finished names, after this.
-    return replace(prepared, names=names.finish(_fold_route(fold)))
-
-
-def _warn_fold_left_rows_blank(
-    prepared: _PreparedBuild, fold: _FoldInputs | None
-) -> None:
-    """Warn about fold-discovered overflow rows a named reference cannot name.
-
-    The other half of `warn_reference_left_rows_blank`: a reference-based
-    single-pass build whose reference already carries rsids does not harvest, so
-    each variant the fold discovers off the reference is stored with no rsid
-    even when its source names one. Out of #255's scope; logged with a count.
-    """
-    if not prepared.names.reference_named or fold is None:
-        return
-    discovered = set(fold.off_panel) - set(prepared.partition.off_panel_alids)
-    unnamed = sum(1 for alid in discovered if not prepared.names.rsid_by_alid.get(alid))
-    if not unnamed:
-        return
-    log.warning(
-        "%d off-reference (Overflow) variant(s) this build discovered are not named by "
-        "the reference and are stored with no rsid; the reference is used as given and "
-        "the sources are not harvested (issue #255 finding 3)",
-        unnamed,
-    )
+    return replace(prepared, names=prepared.names.finish(_fold_route(fold)))
 
 
 def _fold_recorded_axis(
@@ -1901,13 +1874,9 @@ def _off_reference_fold_inputs(
     if off_reference is None:
         return None
     resolved = off_reference.resolved
-    # Named as the harvest's lift named each source; a reference that names its own
-    # rsids is not harvested, so the fold's spelling is all there is, with no rsid.
-    drops = (
-        prepared.lift_drops.found_by(resolved.lift_collisions)
-        if prepared.names.pending
-        else LiftDrops.of(resolved.lift_collisions, spell=raw_site_key)
-    )
+    # Named as the harvest's lift named each source: every reference is harvested
+    # (#258), so a named source is never recorded blank.
+    drops = prepared.lift_drops.found_by(resolved.lift_collisions)
     if not len(resolved.keys):
         return _FoldInputs(
             table=_EMPTY_KEY_TABLE,
@@ -3000,9 +2969,9 @@ def build_hybrid_from_vcf_manifest(
     and off-reference ones to the Ragged Overflow during Pass 2 (single-pass,
     #186); with no source keys and an hg19 source, Pass 1's lift routes (#260).
     With only ``reference_panel``, the two-pass build reads every source once and
-    lifts hg19 rows. A reference that names no rsids runs Pass 1's harvest,
-    rekeyed through this build's routing, so its names match the two-pass
-    build's for every variant both axes carry (`RoutedNames.finish`, #255); rows
+    lifts hg19 rows. A reference runs Pass 1's harvest, rekeyed through this build's
+    routing, so its names are the two-pass build's for every variant both axes carry
+    (`RoutedNames.finish`, #255) unless it names the variant itself (#258); rows
     are assumed hg19 and lifted inline unless the manifest declares
     ``source_assembly=hg38`` (#85); ``source_reader_capability`` supplies the
     per-release default (#174), and ``eaf_reference`` drives the orientation check.
@@ -3088,8 +3057,7 @@ def _require_axis_source(options: _BuildOptions) -> None:
     """Refuse a build with no axis source.
 
     Either source harvests names, so ``--on-rsid-conflict`` governs both
-    (issue #379); a reference that names its own variants is used as given
-    and has no dispute for the policy to decide.
+    (issue #379), a reference that names its own variants included (#258).
     """
     if options.reference_panel is None and options.variant_reference is None:
         raise ValueError("build-hybrid needs --reference-panel or --variant-reference")

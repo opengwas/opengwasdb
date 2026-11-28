@@ -74,8 +74,9 @@ class RsidConflicts:
     ``n_keys`` counts the routing keys whose sources name them differently and
     ``n_variants`` the stored variants those keys reach, which ``drop`` leaves
     unnamed. Both are ``None`` when the build compared no source names -- a
-    reference that names its own variants is used as given -- so a count that
-    was never taken cannot be read as a count of zero.
+    resume of a checkpoint that predates the policy, or a release built before
+    #258 from a reference that named its own variants -- so a count that was
+    never taken cannot be read as a count of zero.
     ``n_variants`` is known only once the fold has routed every key, unless
     there is no disputed key, which reaches no variant.
     """

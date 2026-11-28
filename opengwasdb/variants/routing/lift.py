@@ -115,14 +115,9 @@ class SitePlacement:
     off_primary: set[SourceKey] = field(default_factory=set)
     collisions: LiftCollisions = field(default_factory=dict)
 
-    def drops(
-        self,
-        rsid_of: Callable[[SourceKey], str] = lambda site: "",
-        *,
-        spell: Callable[[SourceKey], str] = routing_key,
-    ) -> LiftDrops:
+    def drops(self, rsid_of: Callable[[SourceKey], str] = lambda site: "") -> LiftDrops:
         """The sites a lift collision dropped, as `LiftDrops` (#325)."""
-        return LiftDrops.of(self.collisions, rsid_of, spell=spell)
+        return LiftDrops.of(self.collisions, rsid_of)
 
 
 def place_sites(
@@ -318,12 +313,12 @@ class LiftDrops:
         cls,
         collisions: LiftCollisions,
         rsid_of: Callable[[SourceKey], str] = lambda site: "",
-        *,
-        spell: Callable[[SourceKey], str] = routing_key,
     ) -> LiftDrops:
-        """``collisions`` as drops, each named by the rsid ``rsid_of`` gives its site."""
+        """``collisions`` as drops, each named by the rsid ``rsid_of`` gives its site and
+        spelled by its Routing Key, as Pass 2's unmatched rows are; a Hybrid fold's
+        drops are spelled as its spills are (`found_by`)."""
         entries = [(alid, site) for alid, sites in collisions.items() for site in sites]
-        spelled = tuple(spell(site) for _alid, site in entries)
+        spelled = tuple(routing_key(site) for _alid, site in entries)
         return cls(
             tuple(DroppedSource(alid, raw_site_key(site), rsid_of(site)) for alid, site in entries),
             frozenset(spelled),

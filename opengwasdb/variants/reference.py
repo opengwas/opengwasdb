@@ -69,7 +69,6 @@ __all__ = [
     "refuse_unmarked_artifact",
     "require_rsids_match_expected",
     "require_written_rsids_match",
-    "warn_reference_left_rows_blank",
     "write_variant_reference",
 ]
 
@@ -213,6 +212,7 @@ def expected_rsids_by_routed_key(
     key: Callable[[_SiteKeyT], str],
     *,
     drop_disputed: bool = False,
+    named: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """The oracle for a *raw* candidate map routed through a build's key function.
 
@@ -227,10 +227,14 @@ def expected_rsids_by_routed_key(
     ``drop_disputed`` -- a build run under ``--on-rsid-conflict drop`` -- a
     variant that any key whose sites name more than one rsid routes to expects
     no name at all (issue #306).
+
+    ``named`` is a Variant Reference's own names, which win (issue #258): they
+    are the first candidates, ahead of every source, so a variant the reference
+    names expects that name whatever its sources say or dispute.
     """
     if drop_disputed:
-        return _expected_without_disputed_keys(rsid_by_site, routing, key)
-    expected: dict[str, str] = {}
+        return _expected_without_disputed_keys(rsid_by_site, routing, key, named or {})
+    expected: dict[str, str] = dict(named or {})
     for site, rsid in rsid_by_site.items():
         alid = routing.get(key(site))
         if alid and rsid and alid not in expected:
@@ -242,6 +246,7 @@ def _expected_without_disputed_keys(
     rsid_by_site: Mapping[_SiteKeyT, str],
     routing: Mapping[str, str],
     key: Callable[[_SiteKeyT], str],
+    named: Mapping[str, str],
 ) -> dict[str, str]:
     """`expected_rsids_by_routed_key` when a disputed variant names nothing.
 
@@ -251,11 +256,11 @@ def _expected_without_disputed_keys(
     another key routed there says. Each key's first name is kept in the order
     its first named site came, which is the raw `(rank, site)` order restricted
     to named sites, so the first key routed to an ALID is the one the raw walk
-    finds.
+    finds. A variant ``named`` names expects that name, disputed or not.
     """
     first_name, disputed = _first_names_and_disputed_keys(rsid_by_site, key)
     unnamed = {routing.get(routed) for routed in disputed}
-    expected: dict[str, str] = {}
+    expected: dict[str, str] = dict(named)
     for routed, rsid in first_name.items():
         alid = routing.get(routed)
         if alid and alid not in expected and alid not in unnamed:
@@ -297,30 +302,6 @@ def _first_names_and_disputed_keys(
         if first_name.setdefault(routed, rsid) != rsid:
             disputed.add(routed)
     return first_name, disputed
-
-
-def warn_reference_left_rows_blank(reference: VariantReference) -> None:
-    """Warn that a reference naming some rsids leaves its other rows blank.
-
-    `--variant-reference` accepts a reference that already names its variants,
-    and both builders then use it as-is: a variant it does not name is stored
-    with no rsid even when a source names it, and no source read is spent to
-    find out. That behaviour predates this contract and is out of issue #255's
-    scope, so the build says so with counts rather than leaving it to be
-    discovered (round-4/5 scope ruling). Shared by both builders so the help,
-    the spec and this warning cannot disagree.
-    """
-    unnamed = len(reference.alids) - len(reference.rsid_by_alid)
-    if not unnamed:
-        return
-    log.warning(
-        "variant reference names %d of its %d ALIDs and leaves %d blank; this build "
-        "uses the reference as given and does not harvest the sources, so a variant "
-        "only a source names is stored with no rsid (issue #255 finding 3)",
-        len(reference.rsid_by_alid),
-        len(reference.alids),
-        unnamed,
-    )
 
 
 def require_rsids_match_expected(

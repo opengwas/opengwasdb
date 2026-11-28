@@ -106,10 +106,11 @@ _RESUME_HELP = (
 )
 _ON_RSID_CONFLICT_HELP = (
     "What to do when sources that spell one variant's alleles in different case name "
-    "it with different rsids, as the rsid harvest of a --reference-panel build or of a "
-    "--variant-reference that names no rsids finds (#306, #379): refuse fails the "
-    "build, naming the variant; drop stores it with no rsid, even where its other "
-    "allele order names it, so it is found by ALID and position but by no name. The "
+    "it with different rsids, as the rsid harvest of a --reference-panel or a "
+    "--variant-reference build finds (#306, #379, #258): refuse fails the "
+    "build, naming the variant, even one the reference names; drop stores it with no "
+    "rsid, even where its other allele order names it, so it is found by ALID and "
+    "position but by no name, unless the reference names it, which keeps that name. The "
     "counts of such keys and variants, and the first 20 keys, are always printed "
     "under rsid_conflicts."
 )
@@ -149,21 +150,25 @@ _SOURCE_ASSEMBLY_HELP = (
     "(hg19/GRCh37 or hg38/GRCh38, default: hg19)"
 )
 _VARIANT_REFERENCE_HELP = (
-    "Build against a precomputed variant axis instead of running Pass 1: a "
+    "Build against a precomputed variant axis instead of Pass 1's union: a "
     "*.variant-ref.tsv.gz artifact, a plain ALID list, or a store variants.tsv.gz. "
     "Source variants absent from the reference are dropped; reference variants "
     "no study observes are stored as NaN. A plain list or a store table names no "
     "source coordinates, so it routes a GRCh38 source by identity; with an hg19 "
     "source in the manifest, Pass 1 lifts every source site as the two-pass build "
     "does, with its chain and liftover failure threshold, and the reference stays "
-    "the axis: a Hybrid build is then the --reference-panel build with that list. A "
-    "reference that names no rsids runs "
-    "Pass 1's rsid harvest and rekeys it through this build's routing, so those "
-    "names are identical to the two-pass build's for every variant both axes "
-    "carry, and the build fails rather than publish an rsid the sources did not "
-    "name for its variant. A reference that already names rsids is used as given: "
-    "a variant it does not name is stored with no rsid even when a source names "
-    "it, and the build warns with counts. The axes are not identical: a named "
+    "the axis: a Hybrid build is then the --reference-panel build with that list. "
+    "Pass 1 still reads every source for its rsids, lifting hg19 sources under the "
+    "liftover failure threshold, which can refuse the build (about 30% of an "
+    "OGS-00004-scale build), and rekeys "
+    "them through this build's routing, so the names are the two-pass build's for "
+    "every variant both axes carry, and the build fails rather than publish an rsid "
+    "the sources did not name for its variant. Where the reference names a variant, "
+    "its own name wins, and the variants it names differently from its sources are "
+    "counted in a warning; every variant it leaves unnamed, Overflow rows included, "
+    "takes the sources' name (#258), and a dispute among the sources refuses under "
+    "--on-rsid-conflict refuse even where the reference names the variant. The "
+    "axes are not identical: a named "
     "off-reference source variant with no usable association is absent here and "
     "kept by a two-pass reference-panel build."
 )
@@ -987,8 +992,9 @@ def build_dense_vcf_command(
     stored_effect_scale (issue #17), original_sd_method, and original_sd (issue #18).
     VCF files are hg19 by default; liftover to hg38 is applied inline.
     --source-reader-capability and --source-assembly supply per-release defaults (#174).
-    --variant-reference supplies a precomputed axis, bypassing Pass 1 (#185);
-    a reference that names no rsids runs Pass 1's harvest for them (#255).
+    --variant-reference supplies a precomputed axis, bypassing Pass 1's union (#185);
+    Pass 1 still harvests rsids, filling every variant the reference leaves
+    unnamed, the reference's own names winning (#255, #258).
     --column-map reads opengwasdb.column-map rows through a Column Map (#281).
     --association-coverage states what the release retains: a Dense release can
     carry only `gwas`, its default (issue #298). --admission-record names where
@@ -1043,9 +1049,9 @@ def build_hybrid_command(
     stored_effect_scale (issue #17), original_sd_method, and original_sd (issue #18).
     On-panel variants fill the Dense Component; off-panel variants go to Ragged
     Overflow. --variant-reference supplies a precomputed axis and source map,
-    bypassing Pass 1 (#186); a reference that names no rsids runs Pass 1's
-    harvest, keeping the names the two-pass build gives every variant both axes
-    carry (#255). --source-reader-capability and --source-assembly supply
+    bypassing Pass 1's union (#186); Pass 1's harvest still runs, keeping the
+    names the two-pass build gives every variant both axes carry (#255), save
+    where the reference names a variant itself, whose name wins (#258). --source-reader-capability and --source-assembly supply
     per-release defaults (#174). --checkpoint keeps a resumable record of each
     phase (#227), and --resume continues the build for OUTPUT_PATH from one.
     --column-map reads opengwasdb.column-map rows through a Column Map (#281).
