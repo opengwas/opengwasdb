@@ -660,6 +660,27 @@ def test_a_reference_with_no_source_keys_routes_grch38_sources_by_identity_and_f
     }
 
 
+@pytest.mark.parametrize("named", [True, False], ids=["names-rsids", "names-none"])
+def test_a_reference_with_no_source_keys_routes_grch38_sources_by_identity(named):
+    """With no hg19 source nothing is lifted: the reference routes by identity, and its
+    sources are read only to say which of its ALIDs one observed, the only ones that
+    carry a source_alid (#261), and for the names the harvest fills (#258). It reads
+    them even when it names its rsids, whose names win."""
+    rsids = {"1:100:A:G": "rsREF"} if named else {}
+    reference = _identity_reference(["1:100:A:G", "1:200:C:T"], rsids)
+    # The source spells 1:100 the other way round and in lower case: its Routing Key
+    # still reaches the ALID, as Pass 2 matches it.
+    source = _source("a", "hg38", [("1", 100, "g", "a", "rsSOURCE")])
+    routing = _route([source], FromReference(reference))
+
+    assert not routing.placed_every_site
+    assert routing.names.rsid_by_alid == ({"1:100:A:G": "rsREF"} if named else
+                                          {"1:100:A:G": "rsSOURCE"})
+    assert routing.source_alids() == {"1:100:A:G": "1:100:A:G"}, "1:200 was observed by none"
+    assert routing.reached_alids == {"1:100:A:G", "1:200:C:T"}, "both are on the axis"
+    assert routing.observed_alids == {"1:100:A:G"}
+
+
 def test_a_reference_with_no_source_keys_refuses_a_source_of_another_assembly():
     """Neither identity nor the hg19 lift places a source declared hg18 (#260)."""
     reference = _identity_reference(["1:100:A:G"], {})

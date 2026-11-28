@@ -10,7 +10,7 @@ reports come from one judgement and cannot disagree (stores #176).
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import Protocol
 
 import numpy as np
@@ -122,14 +122,16 @@ class Gate:
     def unplaced_off_axis(
         self,
         keys: Sequence[str],
-        lifted_off_primary: Collection[str],
+        lifted_away: Mapping[str, str],
         lift_collided: Collection[str] = (),
         *,
         lifted: bool | None = None,
     ) -> None:
         """Rows no axis holds, named by ``keys``: `off_axis`, except those whose key
-        is in ``lifted_off_primary``, which a lift placed off the primary assembly
-        and are counted as `lift_off_primary` (#376), and those in ``lift_collided``, a
+        is in ``lifted_away``, which a lift placed where no Store row can be and are
+        counted under the reason it gives: `lift_off_primary` off the primary assembly
+        (#376), `in_assembly_gap` or `past_contig_end` where GRCh38 has no sequence
+        (#410); and those in ``lift_collided``, a
         lifted site dropped because another source locus reached its ALID (#325). Those
         are `lift_collision` where this Analysis was ``lifted``, and otherwise
         `lift_ambiguous`: a row of a source already on the Store's assembly that spells
@@ -138,12 +140,12 @@ class Gate:
             raise ValueError(
                 "rows of a lift collision are counted by whether their Analysis was lifted"
             )
-        if not (lifted_off_primary or lift_collided):
+        if not (lifted_away or lift_collided):
             self.unplaced(Reason.OFF_AXIS, keys)
             return
         held = _by_reason(
             keys,
-            lifted_off_primary,
+            lifted_away,
             lift_collided if lifted else (),
             () if lifted else lift_collided,
         )
@@ -153,7 +155,7 @@ class Gate:
     def unplaced_unmatched(
         self,
         unmatched: UnmatchedRows,
-        lifted_off_primary: Collection[str],
+        lifted_away: Mapping[str, str],
         lift_collided: Collection[str],
         *,
         lifted: bool,
@@ -161,7 +163,7 @@ class Gate:
         """The unmatched rows of one Analysis, dropped (`unplaced_off_axis`). A
         `lift_collision` row is also named as its source spells it
         (``chrom:pos:ref:alt``), which the build's collision ledger lists."""
-        self.unplaced_off_axis(unmatched.keys, lifted_off_primary, lift_collided, lifted=lifted)
+        self.unplaced_off_axis(unmatched.keys, lifted_away, lift_collided, lifted=lifted)
         if lifted:
             self._lift_collided |= unmatched.raw_keys_of(lift_collided)
 
@@ -229,17 +231,18 @@ class Gate:
 
 def _by_reason(
     keys: Sequence[str],
-    lifted_off_primary: Collection[str],
+    lifted_away: Mapping[str, str],
     lift_collided: Collection[str],
     lift_ambiguous: Collection[str],
 ) -> dict[Reason, list[str]]:
     """``keys`` by the reason their rows left the axis, in precedence order: a
-    collided lifted site, a native row spelling its key, a lift off the primary
-    assembly, else `off_axis`."""
+    collided lifted site, a native row spelling its key, a lift to where no Store
+    row can be (under the reason it carries), else `off_axis`."""
     held: dict[Reason, list[str]] = {
         reason: []
         for reason in (
-            Reason.OFF_AXIS, Reason.LIFT_OFF_PRIMARY, Reason.LIFT_COLLISION, Reason.LIFT_AMBIGUOUS
+            Reason.OFF_AXIS, Reason.LIFT_OFF_PRIMARY, Reason.LIFT_COLLISION, Reason.LIFT_AMBIGUOUS,
+            Reason.IN_ASSEMBLY_GAP, Reason.PAST_CONTIG_END,
         )
     }
     for key in keys:
@@ -247,8 +250,8 @@ def _by_reason(
             held[Reason.LIFT_COLLISION].append(key)
         elif key in lift_ambiguous:
             held[Reason.LIFT_AMBIGUOUS].append(key)
-        elif key in lifted_off_primary:
-            held[Reason.LIFT_OFF_PRIMARY].append(key)
+        elif key in lifted_away:
+            held[Reason(lifted_away[key])].append(key)
         else:
             held[Reason.OFF_AXIS].append(key)
     return held

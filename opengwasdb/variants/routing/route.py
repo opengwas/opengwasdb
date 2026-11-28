@@ -5,17 +5,19 @@ axis: Pass 1 reads each once, lifts the hg19 group to GRCh38 and names each
 ALID by its first-named rsid. Under `FromReference` a Variant Reference is
 the axis and its source keys the routing; Pass 1 runs to harvest names: the
 reference's own names win, and the harvest fills every variant it leaves
-unnamed (issue #258). A reference that names no
-source keys (a plain ALID list, a Store Variant Table) can route only a GRCh38
-row, by identity: when an hg19 source is in the build, Pass 1's lifted union
-routes every site and the reference stays the axis (issue #260). Either harvest
-compares the names a site's spellings carry, by one rule (issue #379).
+unnamed (issue #258). A reference that names no source keys (a plain ALID
+list, a Store Variant Table) can route only a GRCh38 row, by identity: when an
+hg19 source is in the build, Pass 1's lifted union routes every site and the
+reference stays the axis (issue #260); otherwise Pass 1's read of the sources
+also says which of its ALIDs a source observed, the only ones that carry a
+``source_alid`` (issue #261). Either harvest compares the names a site's
+spellings carry, by one rule (issue #379).
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import cached_property
 from pathlib import Path
@@ -30,14 +32,18 @@ from opengwasdb.variants.reference import VariantReference
 from opengwasdb.variants.routing.keys import (
     SourceKey,
     contig_label,
+    folded_site,
     note_origin,
     raw_site_key,
     routing_key,
     source_alid,
 )
 from opengwasdb.variants.routing.lift import (
+    NO_LIFTED_AWAY,
     LiftCollisions,
     LiftDrops,
+    LiftedAway,
+    LiftedAwayReason,
     UnionPlacement,
     collided_sites,
     find_lift_collisions,
@@ -51,6 +57,7 @@ from opengwasdb.variants.routing.names import (
     harvested_names,
     union_names,
 )
+from opengwasdb.variants.routing.provenance import SuppliedCoordinates
 from opengwasdb.variants.routing.table import RouteTable
 from opengwasdb.variants.routing.union import (
     Pass1Stats,
@@ -89,9 +96,10 @@ class FromReference:
     the two-pass one does (issue #354). Pass 1 runs to harvest the sources'
     rsids, which name every variant the reference leaves unnamed (issue #258);
     its lift then uses ``chain_file`` and ``failure_threshold``, though it
-    routes nothing. A reference with no source
-    keys and a build with an hg19 source is the exception: Pass 1's lift, with
-    the same chain and threshold, routes every site (issue #260).
+    routes nothing. A reference with no source keys is read beside its sources
+    either way: with an hg19 source, Pass 1's lift, with the same chain and
+    threshold, routes every site (issue #260); with none, Pass 1 says which
+    ALIDs a source observed (issue #261).
     """
 
     reference: VariantReference
@@ -109,12 +117,23 @@ class VariantRouting:
 
     ``lift_drops`` is each source site dropped because another source locus lifted
     onto its ALID (#325), by both identities, and the routing keys by which Pass 2
-    counts their rows as `lift_collision`.
+    counts their rows as `lift_collision`. ``lifted_away`` is the routing key of each
+    site a lift placed where no Store row can be (Lifted Away), with the reason Pass 2
+    counts its rows under (`split_lifted`, #376, #410).
 
     ``placed_every_site`` says Pass 1 placed every source site, as a two-pass build
     does: a row the site map does not hold is one the routing dropped (a failed or
     off-primary lift, a collision, a tuple both assemblies declare) and is counted
     as such, never placed later by a Hybrid fold (issue #260).
+
+    ``observed`` is the sites some source supplied, each with the ALID it routes to:
+    what `source_alids` reads (#261). It is the site map itself, except under a plain
+    reference (``plain_reference``), whose site map is the identity of every ALID it
+    lists, observed or not; there Pass 1's sites, routed as Pass 2 routes them, are
+    passed, and a plain reference that passes none is refused. ``supplied`` is the
+    coordinates the sources supplied, recorded from the sites read and never from
+    ``observed``: what a builder checks the provenance it writes against
+    (`require_observed_provenance`).
     """
 
     def __init__(
@@ -125,16 +144,27 @@ class VariantRouting:
         axis: Sequence[str] | None,
         names: RoutedNames,
         stats: Pass1Stats,
-        off_primary: frozenset[str] = frozenset(),
+        supplied: SuppliedCoordinates,
+        lifted_away: LiftedAway = NO_LIFTED_AWAY,
         lift_drops: LiftDrops | None = None,
         placed_every_site: bool = False,
+        observed: Mapping[SourceKey, str] | None = None,
+        plain_reference: bool = False,
     ) -> None:
+        if plain_reference and observed is None:
+            raise ValueError(
+                "a Variant Reference with no source keys routes every ALID it lists by "
+                "identity, so its routing must say which ones a source observed; it says "
+                "none, and every listed ALID would record a source_alid no source supplied"
+            )
         self._site_alid: Mapping[SourceKey, str] | None = site_alid
+        self._observed = observed
+        self.supplied = supplied
         self._reoriented = reoriented
         self._axis = axis
         self.names = names
         self.stats = stats
-        self.off_primary = off_primary
+        self.lifted_away = lifted_away
         self.lift_drops = lift_drops if lift_drops is not None else LiftDrops()
         self.placed_every_site = placed_every_site
 
@@ -146,20 +176,36 @@ class VariantRouting:
     @cached_property
     def alids(self) -> list[str]:
         """Every ALID the authority routes to, unique and in genomic order."""
-        if self._axis is not None:
-            return sorted_alids(self._axis)
-        return sorted_alids(self._sites().values())
+        return sorted_alids(self._axis if self._axis is not None else self.reached_alids)
+
+    @cached_property
+    def reached_alids(self) -> frozenset[str]:
+        """Every ALID a site of the site map reaches: under a plain reference, every
+        ALID it lists, observed or not (`source_alids` holds the observed ones)."""
+        return frozenset(self._sites().values())
+
+    def _observed_sites(self) -> Mapping[SourceKey, str]:
+        return self._sites() if self._observed is None else self._observed
+
+    @cached_property
+    def observed_alids(self) -> frozenset[str]:
+        """The ALIDs a site some source supplied routes to: the only ones `source_alids`
+        names a coordinate for (#261)."""
+        return frozenset(self._observed_sites().values())
 
     def source_alids(self) -> dict[str, str | None]:
-        """Each routed ALID's source-build ALID: its sites' own coordinate.
+        """Each routed ALID's source-build ALID: the own coordinate of the sites a source
+        supplied that reach it.
 
         The Store Variant Table's ``source_alid`` provenance. Several sites can
         reach one ALID (a liftover collapse, two assemblies); when they name
         different origins the provenance is ambiguous and is ``None``, never a
-        guess (issue #85). Computed afresh on each call.
+        guess (issue #85). A routed ALID no source observed has no entry, and is
+        written ``.``: a plain reference routes it, but no source supplied a
+        coordinate for it (#261). Computed afresh on each call.
         """
         by_alid: dict[str, str | None] = {}
-        for site, alid in self._sites().items():
+        for site, alid in self._observed_sites().items():
             note_origin(by_alid, alid, source_alid(site))
         return by_alid
 
@@ -176,6 +222,7 @@ class VariantRouting:
             self._sites(), self._reoriented, axes, keep_unmatched=keep_unmatched
         )
         self._site_alid = None
+        self._observed = None
         self._reoriented = ()
         return table
 
@@ -252,7 +299,7 @@ def _route_by_union(
     exist, and a site placed on none of them is off its axis, as an off-panel
     variant is to a two-pass build. A reference that names rsids names those
     variants, and the sources name the rest (issue #258)."""
-    placed, rsid_by_site = _place_union_pass(union_pass, authority)
+    placed, rsid_by_site, supplied = _place_union_pass(union_pass, authority)
     reference = authority.reference if isinstance(authority, FromReference) else None
     names = union_names(
         rsid_by_site.without(placed.dropped, collided_sites(placed.collisions)),
@@ -264,8 +311,8 @@ def _route_by_union(
     return VariantRouting(
         placed.lookup, placed.reoriented,
         axis=None if reference is None else reference.alids,
-        names=names, stats=union_pass.stats,
-        off_primary=frozenset(placed.off_primary),
+        names=names, stats=union_pass.stats, supplied=supplied,
+        lifted_away=placed.away,
         lift_drops=LiftDrops.of(placed.collisions, rsid_by_site.lifted),
         placed_every_site=True,
     )
@@ -273,15 +320,19 @@ def _route_by_union(
 
 def _place_union_pass(
     union_pass: _UnionPass, authority: LiftedUnion | FromReference
-) -> tuple[UnionPlacement, SiteNames]:
-    """Pass 1's union placed on GRCh38: the placement, and each site's first-named rsid."""
+) -> tuple[UnionPlacement, SiteNames, SuppliedCoordinates]:
+    """Pass 1's union placed on GRCh38: the placement, each site's first-named rsid, and
+    the coordinates the union read, recorded before anything is placed (#261)."""
     tuples_by_assembly, rsid_by_site = union_pass.sites()
+    supplied = SuppliedCoordinates.of_sites(
+        site for sites in tuples_by_assembly.values() for site in sites
+    )
     placed = place_union(
         tuples_by_assembly,
         chain_file=authority.chain_file,
         failure_threshold=authority.failure_threshold,
     )
-    return placed, rsid_by_site
+    return placed, rsid_by_site, supplied
 
 
 def _unrouted_collisions(
@@ -327,9 +378,9 @@ class _UnionPass:
 
 def _without_off_primary_lifts(
     reference: VariantReference,
-) -> tuple[VariantReference, frozenset[str]]:
+) -> tuple[VariantReference, LiftedAway]:
     """``reference`` less the source sites a lift placed on an alt, random or
-    unplaced contig, and those sites' routing keys (#376).
+    unplaced contig, and those sites' routing keys, each `LiftedAwayReason.OFF_PRIMARY` (#376).
 
     An extraction since #376 leaves such a site out, but one made before it routes
     an hg19 row onto ``11_KI270927v1_alt:…``. A site whose own contig is not the
@@ -338,7 +389,7 @@ def _without_off_primary_lifts(
     sites reach. A site on an alt contig of its own assembly is a chromosome."""
     stale = _lifted_off_primary_sites(reference)
     if not stale:
-        return reference, frozenset()
+        return reference, NO_LIFTED_AWAY
     trimmed = _without_sites(reference, stale)
     log.warning(
         "%d source key(s) of the Variant Reference were lifted onto an alt, random or "
@@ -346,7 +397,7 @@ def _without_off_primary_lifts(
         "ALID(s) only they reach",
         len(stale), len(reference.alids) - len(trimmed.alids),
     )
-    return trimmed, frozenset(routing_key(site) for site in stale)
+    return trimmed, {routing_key(site): LiftedAwayReason.OFF_PRIMARY for site in stale}
 
 
 def _without_sites(reference: VariantReference, sites: set[SourceKey]) -> VariantReference:
@@ -477,12 +528,18 @@ def _route_by_reference(
     so a reference that names some rsids is never used as the whole answer. The
     reference routes, and the keys it records as re-oriented are the ones
     re-oriented (issue #354).
+
+    An artifact's source keys are coordinates its sources supplied, so they are its
+    provenance. A plain reference has none: its site map is the identity of every
+    ALID it lists, so the sites Pass 1 read, routed as Pass 2 routes them, are what
+    is observed (#261).
     """
     reference, off_primary = _without_off_primary_lifts(authority.reference)
     reference, frozen = _without_frozen_collisions(
         reference, union_pass.sources, authority.chain_file
     )
-    placed, rsid_by_site = _place_union_pass(union_pass, authority)
+    placed, rsid_by_site, read = _place_union_pass(union_pass, authority)
+    observed = _observed_by(reference, lambda: placed.lookup)
     # A tuple declared under both assemblies is two loci; naming the lifted
     # one from the other's row would attach an rsid to a variant a different
     # association owns.
@@ -505,7 +562,35 @@ def _route_by_reference(
         axis=reference.alids,
         names=names,
         stats=union_pass.stats,
-        off_primary=off_primary,
+        supplied=_supplied_by(reference, read),
+        lifted_away=off_primary,
         lift_drops=lift_drops,
+        observed=observed,
+        plain_reference=not reference.explicit_source_keys,
     )
+
+
+def _supplied_by(reference: VariantReference, read: SuppliedCoordinates) -> SuppliedCoordinates:
+    """The coordinates a reference's build may record as ``source_alid``: an artifact's
+    recorded source keys, which its extraction read, or the sites Pass 1 ``read``."""
+    if reference.explicit_source_keys:
+        return SuppliedCoordinates.of_sites(reference.source_lookup)
+    return read
+
+
+def _observed_by(
+    reference: VariantReference, sites: Callable[[], Iterable[SourceKey]]
+) -> dict[SourceKey, str] | None:
+    """What a plain reference observed: of the ``sites`` a source supplied, each one
+    it routes, with the ALID it reaches, matched by Routing Key as Pass 2 matches a row
+    (`folded_site`) (#261). None for an artifact, whose source keys are observations
+    already; ``sites`` is read only for a plain reference."""
+    if reference.explicit_source_keys:
+        return None
+    routed: dict[SourceKey, str] = {}
+    for site in sites():
+        alid = reference.source_lookup.get(folded_site(site))
+        if alid is not None:
+            routed[site] = alid
+    return routed
 

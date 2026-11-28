@@ -35,8 +35,10 @@
 > chromosome's label. `in_assembly_gap` and `past_contig_end`: every builder
 > drops a row of a source on GRCh38 placed in a run of two or more `N`, or past
 > its contig's last base, before its values are judged, and no axis holds its
-> variant. A lifted row is judged after the lift, which #260 adds; until then the
-> release rule `variant_table.assembly_gap` is the backstop. All three are logged.
+> variant. A lifted row is judged after the lift, at the coordinate the lift placed
+> it on, and counted under the same two reasons; the release rule
+> `variant_table.assembly_gap` stays the backstop for a release built before that
+> and for a Variant Reference extracted before it. All three are logged.
 >
 > **Clarified 7 Nov 2026 (issue #316): D5 has no reversed-indel case.** With
 > every indel's ALID spelt reference first, the rows of one (variant,

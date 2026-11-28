@@ -16,10 +16,19 @@
     placed in an assembly gap (a run of two or more `N`), or past its contig's
     end, as `in_assembly_gap` or `past_contig_end`, and holds its variant on no
     axis. The rule set's version is `admission/16`.
+  - **Lifted rows are judged after the lift.** A row whose lift lands in a gap
+    or past its contig's end is dropped and counted under the same two reasons,
+    by every path that lifts (`place_union`, the Hybrid fold, extraction,
+    `build-ragged-ssf`, `build-ragged-besd`). The hg19-to-GRCh38 chain aligns
+    2,372 bases, in 14 runs of 9 primary-contig blocks, into gaps. A lifted
+    Ragged SSF or BESD Store's `provenance.lift` counts them as
+    `n_outside_sequence`, beside `n_off_primary`. A Hybrid
+    checkpoint records each such key with its reason, so its format moves to 7
+    and a format-6 checkpoint is refused.
   - **New `validate` rule, `variant_table.assembly_gap`.** It fails a GRCh38
     release that holds such a variant: an error from format 0.2.2, a warning
-    before it. It is also the backstop for lifted rows until #260 judges them
-    after the lift.
+    before it. It stays the backstop for a release built before, and for a
+    Variant Reference extracted before, lifted rows were judged.
   - **Published Stores this rule fails:** OGS-00011 (1,325 variants in gaps and
     373 past an end), OGS-00032 (86 and 5) and OGS-00033 (232 and 18). The 0.3.0
     rebuild clears them.

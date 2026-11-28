@@ -24,10 +24,20 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable, Collection, Iterable, Mapping, MutableMapping, MutableSet
+from collections.abc import (
+    Callable,
+    Collection,
+    Iterable,
+    Mapping,
+    MutableMapping,
+    MutableSet,
+    Sequence,
+)
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
+from types import MappingProxyType
 from typing import NamedTuple
 
 from opengwasdb.build.liftover import (
@@ -38,7 +48,9 @@ from opengwasdb.build.liftover import (
 )
 from opengwasdb.encoding.timing import format_duration
 from opengwasdb.store_reader.identity import is_primary_contig
-from opengwasdb.variants.normalise import canonical_alid
+from opengwasdb.variants import assembly_gaps
+from opengwasdb.variants.assembly_gaps import grch38
+from opengwasdb.variants.normalise import LiftedOffPrimary, canonical_alid
 from opengwasdb.variants.routing.keys import (
     SourceKey,
     contig_label,
@@ -55,43 +67,112 @@ SourceLookup = dict[SourceKey, str]
 #: the projected alleles (issue #284).
 ReorientedKeys = set[SourceKey]
 
+class LiftedAwayReason(StrEnum):
+    """Why a lift placed a site where no Store row can be (CONTEXT: Lifted Away): the
+    Admission reason its rows are dropped and counted under. Each value is the
+    Admission reason's own string, so `admission.Reason` reads it unchanged."""
+
+    #: On an alt, random or unplaced contig (#376).
+    OFF_PRIMARY = LiftedOffPrimary.reason
+    #: On a primary contig, in an assembly gap (#410).
+    IN_ASSEMBLY_GAP = assembly_gaps.IN_ASSEMBLY_GAP
+    #: On a primary contig, past its last base (#410).
+    PAST_CONTIG_END = assembly_gaps.PAST_CONTIG_END
+
+
+#: The sites a lift placed where no Store row can be, by the key a build finds their
+#: rows by (a Routing Key, or the Hybrid fold's raw key), each with its reason.
+LiftedAway = Mapping[str, LiftedAwayReason]
+#: The one empty `LiftedAway`: the default of every signature that takes one.
+NO_LIFTED_AWAY: LiftedAway = MappingProxyType({})
+
+
+def away_counts(away: Mapping[SourceKey, LiftedAwayReason]) -> dict[str, int]:
+    """A lift's ``provenance.lift`` counts of the sites it placed where no Store row can
+    be: ``n_off_primary`` (#376) and ``n_outside_sequence`` (#410), which with the sites
+    it placed make up its ``n_lifted``."""
+    outside = sum(reason is not LiftedAwayReason.OFF_PRIMARY for reason in away.values())
+    return {"n_off_primary": len(away) - outside, "n_outside_sequence": outside}
+
 
 class LiftSplit(NamedTuple):
-    """A lift's rows by where they landed: ``primary`` on a primary-assembly contig,
-    and the source keys of ``off_primary``, which landed on an alt, random or
-    unplaced contig (#376)."""
+    """A lift's rows by where they landed: ``primary`` where a Store can hold them, and
+    ``away``, the source keys of the rest (Lifted Away), each with its reason: an alt,
+    random or unplaced contig (#376), or a primary contig where GRCh38 has no sequence
+    (#410)."""
 
     primary: dict[SourceKey, LiftedRow]
-    off_primary: set[SourceKey]
+    away: dict[SourceKey, LiftedAwayReason]
 
 
-def split_off_primary(rows: Mapping[SourceKey, LiftedRow]) -> LiftSplit:
-    """Split a lift's rows by `is_primary_contig`: the one place the rule is applied
-    to a lift's result, which every path that lifts a source calls."""
-    primary = {key: row for key, row in rows.items() if is_primary_contig(row.chromosome)}
-    return LiftSplit(primary, rows.keys() - primary.keys())
+def split_lifted(rows: Mapping[SourceKey, LiftedRow]) -> LiftSplit:
+    """Split a lift's rows by where they landed (`LiftSplit`): the one place a lift's
+    result is judged, which every path that lifts a source calls.
+
+    The judgement is of the lifted coordinate, so it is made here and not at
+    Admission, whose rows still carry the source's: the hg19->hg38 chain aligns
+    2,372 bases of 9 blocks into GRCh38 gaps, and a row lifted there names no variant."""
+    away = {key: LiftedAwayReason.OFF_PRIMARY for key, row in rows.items()
+            if not is_primary_contig(row.chromosome)}
+    placed = [(key, row) for key, row in rows.items() if key not in away]
+    outside = _outside_sequence(placed)
+    away.update(outside)
+    _warn_outside_sequence(outside, rows)
+    return LiftSplit({key: row for key, row in placed if key not in outside}, away)
 
 
-def lifted_off_primary(sites: Collection[SourceKey], *, chain_file: str | Path | None) -> set[str]:
-    """The routing keys of the hg19 ``sites`` the chain places off the primary assembly.
+def _outside_sequence(
+    placed: Sequence[tuple[SourceKey, LiftedRow]],
+) -> dict[SourceKey, LiftedAwayReason]:
+    """The ``placed`` sites a lift put where GRCh38 has no sequence, each with its reason
+    (`AssemblySequence.reasons_at`)."""
+    reasons = grch38().reasons_at(
+        (contig_label(row.chromosome) for _key, row in placed),
+        (row.position for _key, row in placed),
+    )
+    return {
+        key: LiftedAwayReason(reason)
+        for (key, _row), reason in zip(placed, reasons, strict=True) if reason
+    }
+
+
+def _warn_outside_sequence(
+    outside: Mapping[SourceKey, LiftedAwayReason], rows: Mapping[SourceKey, LiftedRow]
+) -> None:
+    """Say how many lifted sites landed where GRCh38 has no sequence, naming the first."""
+    if outside:
+        first = min(outside)
+        row = rows[first]
+        log.warning(
+            "%d lifted variant(s) landed in a GRCh38 assembly gap or past their contig's "
+            "end, where no variant is -- their rows are dropped (first: %s -> %s:%d)",
+            len(outside), raw_site_key(first), row.chromosome, row.position,
+        )
+
+
+def lifted_away(
+    sites: Collection[SourceKey], *, chain_file: str | Path | None
+) -> dict[str, LiftedAwayReason]:
+    """The routing keys of the hg19 ``sites`` the chain places where a Store holds no
+    row (`split_lifted`), each with its Admission reason.
 
     For a build routed by a Variant Reference, whose unmatched hg19 rows are the
     only ones not lifted already: no failure threshold applies, since a site the
     chain places nowhere is `off_axis` as before."""
     rows, _attempts, _failures = lifted_rows(sites, chain_file=chain_file)
-    return {routing_key(site) for site in split_off_primary(rows).off_primary}
+    return {routing_key(site): reason for site, reason in split_lifted(rows).away.items()}
 
 
 class UnionPlacement(NamedTuple):
     """`place_union`'s result: the union's site lookup, the keys the lift
-    re-oriented (#284), the routing keys both assemblies declared (#255), and the
-    routing keys of the sites the lift placed off the primary assembly (#376), and
-    the lift collisions it dropped (#325)."""
+    re-oriented (#284), the routing keys both assemblies declared (#255), the
+    routing keys of the sites the lift placed where no Store row can be, each with
+    its Admission reason (#376, #410), and the lift collisions it dropped (#325)."""
 
     lookup: SourceLookup
     reoriented: ReorientedKeys
     dropped: set[str]
-    off_primary: set[str]
+    away: dict[str, LiftedAwayReason]
     collisions: LiftCollisions
 
 
@@ -103,16 +184,17 @@ class SitePlacement:
     is absent. ``reoriented`` holds the sites a reverse-strand chain block
     re-oriented: their stored alleles call the other allele A1, so a z signed
     by the source must be negated and an EAF complemented (issue #284).
-    ``off_primary`` holds the sites the lift placed on an alt, random or
-    unplaced contig: they are in neither ``alid`` nor ``reoriented``, and a
-    build drops and counts their rows (#376). ``collisions`` holds the sites
-    dropped because another source locus reached the same ALID, by that ALID:
+    ``away`` holds the sites the lift placed where no Store row can be, each with
+    its Admission reason (`split_lifted`): they are in neither ``alid`` nor
+    ``reoriented``, and a build drops and counts their rows (#376, #410).
+    ``collisions`` holds the sites dropped because another source locus reached
+    the same ALID, by that ALID:
     they too are in neither ``alid`` nor ``reoriented`` (#325).
     """
 
     alid: SourceLookup
     reoriented: ReorientedKeys
-    off_primary: set[SourceKey] = field(default_factory=set)
+    away: dict[SourceKey, LiftedAwayReason] = field(default_factory=dict)
     collisions: LiftCollisions = field(default_factory=dict)
 
     def drops(self, rsid_of: Callable[[SourceKey], str] = lambda site: "") -> LiftDrops:
@@ -176,8 +258,8 @@ def _lift_hg19(
     """
     log.info("Running liftover hg19 → hg38 (%d variants)", len(sites))
     lifted = lift_hg19_to_hg38(sites, chain_file=chain_file, failure_threshold=failure_threshold)
-    split = split_off_primary(lifted)
-    placement.off_primary.update(split.off_primary)
+    split = split_lifted(lifted)
+    placement.away.update(split.away)
     alid = {key: row.alid for key, row in split.primary.items()}
     reoriented = {key for key, row in split.primary.items() if statistics_swap(key, row)}
     # The collision rule holds the lifted group to itself: a GRCh38 source's variant
@@ -186,11 +268,14 @@ def _lift_hg19(
     placement.alid.update(alid)
     placement.reoriented.update(reoriented)
     log.info("Liftover complete: %d variants mapped", len(lifted))
-    if placement.off_primary:
+    off_primary = [
+        key for key, reason in placement.away.items() if reason is LiftedAwayReason.OFF_PRIMARY
+    ]
+    if off_primary:
         log.warning(
             "%d lifted variant(s) landed on an alt, random or unplaced contig, "
             "which the Store does not hold -- their rows are dropped (first: %s)",
-            len(placement.off_primary), _first_key(placement.off_primary),
+            len(off_primary), _first_key(off_primary),
         )
 
 
@@ -403,8 +488,8 @@ def _lift_union_by_assembly(
     liftover_failure_threshold: float,
 ) -> tuple[SitePlacement, SitePlacement]:
     """Place each assembly's group; return the hg38 passthrough and the lifted
-    placement (its re-oriented keys, issue #284, and the sites it placed off the
-    primary assembly, #376). Kept apart so the both-assembly drop can compare them."""
+    placement (its re-oriented keys, issue #284, and the sites it placed where no
+    Store row can be, #376, #410). Kept apart so the both-assembly drop can compare them."""
     passthrough = place_sites({"hg38": tuples_by_assembly.pop("hg38", set())})
     lifted = place_sites(
         {"hg19": tuples_by_assembly.pop("hg19", set())},
@@ -453,31 +538,33 @@ def _drop_cross_assembly_collisions(
     passthrough_lookup: SourceLookup,
     lifted_lookup: SourceLookup,
     swapped: ReorientedKeys,
-    off_primary: set[SourceKey],
+    away: dict[SourceKey, LiftedAwayReason],
     collided: AbstractSet[SourceKey] = frozenset(),
 ) -> set[str]:
     """Apply `cross_assembly_collisions` to the union's two placed groups, and
     return the dropped routing keys, which a harvest also drops from its
     candidates.
 
-    A site lifted off the primary assembly is a lifted locus all the same: a
-    GRCh38 source spelling its key would otherwise take the row that is not its,
-    and so is a site dropped as a lift collision (``collided``, #325): its rows reach
-    no ALID, and must not route by its raw key onto a GRCh38 row that spells it.
+    A site lifted where no Store row can be (``away``, #376, #410) is a lifted locus
+    all the same: a GRCh38 source spelling its key would otherwise take the row that
+    is not its, and so is a site dropped as a lift collision (``collided``, #325): its
+    rows reach no ALID, and must not route by its raw key onto a GRCh38 row that spells it.
     """
     dropped = cross_assembly_collisions(
-        passthrough_lookup.keys(), lifted_lookup.keys() | off_primary | collided
+        passthrough_lookup.keys(), lifted_lookup.keys() | away.keys() | collided
     )
     log_cross_assembly_drop(len(dropped))
     if dropped:
-        for lookup in (passthrough_lookup, lifted_lookup):
-            for site in [site for site in lookup if routing_key(site) in dropped]:
+        for lookup in (passthrough_lookup, lifted_lookup, away):
+            for site in _spelling(lookup, dropped):
                 del lookup[site]
                 swapped.discard(site)
-        off_primary.difference_update(
-            [site for site in off_primary if routing_key(site) in dropped]
-        )
     return dropped
+
+
+def _spelling(sites: Iterable[SourceKey], keys: AbstractSet[str]) -> list[SourceKey]:
+    """The ``sites`` whose routing key is one of ``keys``."""
+    return [site for site in sites if routing_key(site) in keys]
 
 
 def place_union(
@@ -488,7 +575,8 @@ def place_union(
 ) -> UnionPlacement:
     """Place the union on hg38 (`UnionPlacement`): the both-assembly tuples it
     dropped are routing keys (issue #255 rounds 4-5), and so are the sites the
-    lift placed off the primary assembly, whose rows a build drops and counts (#376).
+    lift placed where no Store row can be, whose rows a build drops and counts by
+    the reason each carries (#376, #410).
     """
     finalise_start = time.monotonic()
     passthrough, lifted = _lift_union_by_assembly(
@@ -497,9 +585,9 @@ def place_union(
         liftover_failure_threshold=failure_threshold,
     )
     passthrough_lookup, lifted_lookup = passthrough.alid, lifted.alid
-    swapped, off_primary = lifted.reoriented, lifted.off_primary
+    swapped, away = lifted.reoriented, lifted.away
     dropped_keys = _drop_cross_assembly_collisions(
-        passthrough_lookup, lifted_lookup, swapped, off_primary,
+        passthrough_lookup, lifted_lookup, swapped, away,
         collided_sites(lifted.collisions),
     )
     source_lookup = {**passthrough_lookup, **lifted_lookup}
@@ -510,6 +598,6 @@ def place_union(
         format_duration(time.monotonic() - finalise_start),
     )
     return UnionPlacement(
-        source_lookup, swapped, dropped_keys, {routing_key(site) for site in off_primary},
-        lifted.collisions,
+        source_lookup, swapped, dropped_keys,
+        {routing_key(site): reason for site, reason in away.items()}, lifted.collisions,
     )

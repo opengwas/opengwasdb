@@ -734,8 +734,8 @@ def _off_sequence(sites: set[tuple[str, int, str, str]]) -> set[tuple[str, int, 
     if not sites:
         return set()
     ordered = list(sites)
-    found = grch38().outside_at((site[0] for site in ordered), (site[1] for site in ordered))
-    outside = {site for site, out in zip(ordered, found.tolist(), strict=True) if out}
+    found = grch38().reasons_at((site[0] for site in ordered), (site[1] for site in ordered))
+    outside = {site for site, reason in zip(ordered, found, strict=True) if reason}
     if outside:
         log.warning(
             "%d GRCh38 site(s) lie in an assembly gap or past their contig's end, where "

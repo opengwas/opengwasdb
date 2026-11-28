@@ -19,7 +19,7 @@ import csv
 import logging
 import math
 from collections import Counter
-from collections.abc import Collection, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -96,7 +96,7 @@ from opengwasdb.variants import (
 )
 from opengwasdb.variants.normalise import allele_fault, chromosome_fault, undeclared_reference
 from opengwasdb.variants.routing import collapse_duplicates
-from opengwasdb.variants.routing.lift import split_off_primary
+from opengwasdb.variants.routing.lift import LiftedAwayReason, away_counts, split_lifted
 
 log = logging.getLogger(__name__)
 
@@ -376,9 +376,10 @@ class _EsiAxis:
     ID, kept only for a build that joins a sample-size table on it (ADR 0067).
     ``malformed`` names each ESI row whose identity no ALID can spell, and why
     (#365): it is neither lifted nor placed; the probes' reader names their
-    rows at it. ``off_primary`` holds each ESI row the lift placed on an alt,
-    random or unplaced contig (#376): it is off the axis, and counted apart
-    from the rows no lift reached.
+    rows at it. ``away`` holds each ESI row the lift placed where no Store row can
+    be, with its Admission reason (`split_lifted`: an alt, random or unplaced contig,
+    #376, or where GRCh38 has no sequence, #410): it is off the axis, and counted
+    apart from the rows no lift reached.
     """
 
     probes: list[ProbeRecord]
@@ -393,7 +394,7 @@ class _EsiAxis:
     eaf_by_esi: np.ndarray | None = None
     snp_ids: list[str] | None = None
     malformed: dict[int, str] = field(default_factory=dict)
-    off_primary: np.ndarray = field(default_factory=lambda: np.empty(0, dtype=bool))
+    away: dict[int, LiftedAwayReason] = field(default_factory=dict)
 
     def place(self, esi_rows: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Each ESI row's ``(variant index, flipped)`` on the axis; ``-1`` off it."""
@@ -420,7 +421,7 @@ def _esi_axis(
     lift = _lifted_coordinates(
         usable, source_build, chain_file=chain_file, variant_reference=variant_reference
     )
-    lifted, off_primary_rows, lift_provenance = lift
+    lifted, away_rows, lift_provenance = lift
     usable = _on_sequence(usable, source_build)
     canonical = _canonical_variants(usable, lifted)
     canonical.collisions.report()
@@ -449,7 +450,7 @@ def _esi_axis(
         ),
         snp_ids=snp_ids,
         malformed=malformed,
-        off_primary=_row_mask(off_primary_rows, len(snps)),
+        away=away_rows,
     )
 
 
@@ -464,14 +465,6 @@ def _on_sequence(snps: list[SnpRecord], source_build: str) -> list[SnpRecord]:
     outside = sequence.outside_at((normalise_chromosome(s.chromosome) for s in snps),
                                   (s.bp for s in snps))
     return [snp for snp, out in zip(snps, outside.tolist(), strict=True) if not out]
-
-
-def _row_mask(rows: Collection[int], n_rows: int) -> np.ndarray:
-    """``rows`` as a boolean mask over every ESI row."""
-    mask = np.zeros(n_rows, dtype=bool)
-    if rows:
-        mask[np.fromiter(rows, dtype=np.int64, count=len(rows))] = True
-    return mask
 
 
 def _axis_frequencies(
@@ -588,11 +581,11 @@ def _read_sources(prefix: Path) -> tuple[list[SnpRecord], list[ProbeRecord]]:
 
 class _Lift(NamedTuple):
     """`_lifted_coordinates`' result: each lifted ESI row's orientation (``None``
-    for a build that lifts nothing), the rows placed off the primary assembly, and
-    the lift's provenance."""
+    for a build that lifts nothing), the rows placed where no Store row can be, each
+    with its Admission reason, and the lift's provenance."""
 
     orientations: dict[int, Orientation] | None
-    off_primary_rows: set[int]
+    away_rows: dict[int, LiftedAwayReason]
     provenance: dict[str, object] | None
 
 
@@ -603,12 +596,13 @@ def _lifted_coordinates(
     chain_file: str | Path | None = None,
     variant_reference: str | Path | None = None,
 ) -> _Lift:
-    """Lift every ESI row and return its orientation, the rows it placed off the
-    primary assembly, and the lift's record (`_Lift`).
+    """Lift every ESI row and return its orientation, the rows it placed where no Store
+    row can be, and the lift's record (`_Lift`).
 
-    The orientations are for the rows the lift landed on a primary contig, and
+    The orientations are for the rows the lift landed where GRCh38 has sequence, and
     ``None`` when no lift is needed. A row the lift placed on an alt, random or unplaced contig
-    is in neither the orientations nor the axis (#376). The orientation is
+    (#376), or in an assembly gap or past its contig's end (#410), is in neither the
+    orientations nor the axis. The orientation is
     the resolver's for the same row: the alleles are projected onto the
     chain block's strand, so a reverse-strand SNP's ALID is the complemented
     variant rather than an hg38 position carrying hg19-strand alleles
@@ -627,7 +621,7 @@ def _lifted_coordinates(
     provenance -- rather than letting an unchecked lift look like a checked one.
     """
     if source_build.lower().strip() in _BUILDS_ALREADY_HG38:
-        return _Lift(None, set(), None)
+        return _Lift(None, {}, None)
     # Refused before any lift runs: this builder knows one cross-build direction
     # (hg19→hg38), and an unrecognised build must not be silently lifted as hg19.
     normalise_build(source_build)
@@ -642,31 +636,35 @@ def _lifted_coordinates(
         chain_file=chain_file,
         failure_threshold=_LIFTOVER_FAILURE_THRESHOLD,
     )
-    split = split_off_primary(lifted_by_source)
-    off_primary_rows = _off_primary_esi_rows(rows, split.off_primary)
+    split = split_lifted(lifted_by_source)
+    away_rows = _away_esi_rows(rows, split.away)
     lifted = _orient_lifted_rows(rows, split.primary)
     print(
-        f"Liftover {source_build}→hg38: "
-        f"{len(rows) - len(lifted) - len(off_primary_rows)}/{len(snps)} variants failed, "
-        f"{len(off_primary_rows)} left out on an alt, random or unplaced contig"
+        f"Liftover {source_build}→hg38: {len(rows) - len(lifted) - len(away_rows)}/"
+        f"{len(snps)} variants failed, {len(away_rows)} left out on an alt, random or "
+        "unplaced contig, or where GRCh38 has no sequence"
     )
     provenance = _lift_provenance(
-        source_build, chain_file, variant_reference, split.primary,
-        n_off_primary=len(split.off_primary),
+        source_build, chain_file, variant_reference, split.primary, away=split.away
     )
-    return _Lift(lifted, off_primary_rows, provenance)
+    return _Lift(lifted, away_rows, provenance)
 
 
-def _off_primary_esi_rows(
-    rows: list[tuple[int, str, int, str, str]], off_primary: set[tuple[str, int, str, str]]
-) -> set[int]:
-    """The ESI rows whose source key the lift placed off the primary assembly (#376)."""
+def _away_esi_rows(
+    rows: list[tuple[int, str, int, str, str]],
+    away: Mapping[tuple[str, int, str, str], LiftedAwayReason],
+) -> dict[int, LiftedAwayReason]:
+    """The ESI rows whose source key the lift placed where no Store row can be, each
+    with its Admission reason (#376, #410)."""
     found = {
-        row_idx for row_idx, chrom, bp, a1, a2 in rows if (chrom, bp, a1, a2) in off_primary
+        row_idx: away[(chrom, bp, a1, a2)]
+        for row_idx, chrom, bp, a1, a2 in rows
+        if (chrom, bp, a1, a2) in away
     }
     if found:
         log.warning(
-            ".esi: %d row(s) lifted onto an alt, random or unplaced contig and are left out",
+            ".esi: %d row(s) lifted onto an alt, random or unplaced contig, or where GRCh38 "
+            "has no sequence, and are left out",
             len(found),
         )
     return found
@@ -714,7 +712,7 @@ def _lift_provenance(
     variant_reference: str | Path | None,
     lifted_by_source: dict[tuple[str, int, str, str], LiftedRow],
     *,
-    n_off_primary: int,
+    away: Mapping[tuple[str, int, str, str], LiftedAwayReason],
 ) -> dict[str, object]:
     """What the lift was performed with, and what its allele check found.
 
@@ -725,8 +723,8 @@ def _lift_provenance(
     provenance: dict[str, object] = {
         "source_build": normalise_build(source_build),
         "chain_file": str(chain_file) if chain_file is not None else None,
-        "n_lifted": len(lifted_by_source) + n_off_primary,
-        "n_off_primary": n_off_primary,
+        "n_lifted": len(lifted_by_source) + len(away),
+        **away_counts(away),
         "reference": str(variant_reference) if variant_reference is not None else None,
         "n_alleles_verified": None,
         "n_reference_other_variant": None,
@@ -1267,9 +1265,15 @@ def _placed_rows(
         )
     )
     off_axis = np.flatnonzero(keep & ~on_axis)
+    keys = batch.keys_at(off_axis)
+    away = axis.away
     gate.unplaced_off_axis(
-        batch.keys_at(off_axis),
-        batch.keys_at(off_axis[axis.off_primary[batch.source_row[off_axis]]]),
+        keys,
+        {
+            key: away[row]
+            for key, row in zip(keys, batch.source_row[off_axis].tolist(), strict=True)
+            if row in away
+        } if away else {},
     )
     placed = keep & on_axis
     return _ProbeRows(
