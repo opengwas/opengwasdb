@@ -64,6 +64,28 @@
         "no_effect_allele": 0
       },
       "pca_thresh": 0.9,
+      "se_exceptions": {
+        "analyses": [
+          {
+            "analysis_id": "trait_a",
+            "exception_rate": 0.0,
+            "n_exceptions": 0,
+            "n_imputed_exceptions": 0,
+            "n_imputed_se": 0,
+            "n_se": 201
+          },
+          {
+            "analysis_id": "trait_b",
+            "exception_rate": 0.0,
+            "n_exceptions": 0,
+            "n_imputed_exceptions": 0,
+            "n_imputed_se": 4,
+            "n_se": 200
+          }
+        ],
+        "budget": 0.02,
+        "over_budget": []
+      },
       "se_out_of_range": {
         "imputed": [
           0,

@@ -23,6 +23,7 @@ import pytest
 from opengwasdb.admission import NotAdmitted
 from opengwasdb.encoding import write_eaf_reference
 from opengwasdb.encoding.association_codec import AssociationCodec, CellValues, Placement
+from opengwasdb.encoding.codec import expit, logit
 from opengwasdb.encoding.planes import write_encoded_planes
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter, ReferenceCompletion
@@ -47,10 +48,13 @@ N_VARIANTS = 40
 COEFFICIENTS = np.array([[-3.0, -0.5], [-2.5, -0.4], [-2.0, -0.6]], dtype=np.float32)
 
 
+_OFF_GRID_EAF = 8  # observed in Analysis 0 and inside the code range, so only the carry holds it
+
+
 def _cells() -> tuple[np.ndarray, list[np.ndarray], CellValues]:
     """Three Analyses of observed, imputed and missing cells, as completion holds them.
 
-    Observed SEs sit on the source's code grid, as a source decodes them, except
+    Observed SEs and frequencies sit on the source's code grid, as a source decodes them, except
     one half a step off it, which only the carry rule stores exactly. Imputed
     cells have no frequency of their own; one of Analysis 1's sits far below the
     model, an exact exception. Analysis 2 holds nothing.
@@ -73,8 +77,17 @@ def _cells() -> tuple[np.ndarray, list[np.ndarray], CellValues]:
         Placement.sequence(0, vi, ai, 3),
         where="the fixture",
     )
+    # As a source decodes them: a frequency on its code grid, or the carry (#390)
+    # would hold it as an exception and the SE would be coded against the exact value.
+    eaf = np.asarray(on_model.eaf, dtype=np.float32).copy()
     se = np.asarray(on_model.se, dtype=np.float32).copy()
     se[0] *= np.float32(np.exp(0.5 * PLAN.se.step))  # observed, off the grid
+    off = vi[_OFF_GRID_EAF]  # an observed frequency half a step off its variant's grid (#390)
+    eaf[_OFF_GRID_EAF] = np.float32(
+        expit(logit(_baseline()[off]) + (round(float(
+            (logit(eaf[_OFF_GRID_EAF]) - logit(_baseline()[off])) / PLAN.eaf.step
+        )) + 0.5) * PLAN.eaf.step)
+    )
     se[15] = np.float32(1e-4)  # imputed, beyond the residual range
     eaf[imputed == 1] = np.nan
     z[missing], se[missing], eaf[missing] = np.nan, np.nan, np.nan
@@ -146,6 +159,8 @@ def test_a_completed_sequence_is_stored_as_the_whole_batch_encodes_it(tmp_path):
     assert whole_se[15] == SE_EXCEPTION, "fixture: an imputed SE beyond the range"
     assert (whole_se[1:3] != SE_EXCEPTION).all(), "fixture: on-grid observed SEs keep codes"
     assert whole_se[6] == SE_MISSING
+    held = store_arrays.open_group(tmp_path / "whole" / RAGGED_ZARR_PATH)["eaf_exception_index"][:]
+    assert _OFF_GRID_EAF in held, "fixture: the off-grid observed frequency is carried exactly"
 
     _write_streamed(tmp_path / "streamed", offsets, vi, cells)
 

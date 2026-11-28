@@ -75,6 +75,7 @@ from opengwasdb.completion.options import DEFAULT_OPTIONS, CompletionOptions
 from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
+from opengwasdb.completion.se_exceptions import report_se_exceptions, se_exception_record
 from opengwasdb.completion.se_out_of_range import PROVENANCE_KEY as SE_OUT_OF_RANGE_KEY
 from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts
 from opengwasdb.encoding import (
@@ -94,6 +95,7 @@ from opengwasdb.encoding.memory import (
     FORK_FLOOR_BYTES,
     pool_workers,
 )
+from opengwasdb.encoding.se_counts import SeExceptionCounts
 from opengwasdb.encoding.timing import PhaseTimer, format_duration, log_phase, log_progress
 from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.constants import (
@@ -446,6 +448,9 @@ class _CompletedArrays:
     #: What the completion left out for an SE above `float16`'s range, per
     #: Analysis: source cells it did not carry, and fills it left missing (#338).
     left_out: LeftOut
+    #: Per Analysis, the SEs held as exact exceptions; None for a plane that holds
+    #: no residual SE (#390, as Ragged completion has recorded since #301).
+    se_counts: SeExceptionCounts | None
 
 
 def _read_source_axis(src: Path, impute_analysis_ids: set[str] | None) -> _SourceAxis:
@@ -835,6 +840,7 @@ def _completed_arrays(
         total_imputed=total_imputed,
         imputed_by_analysis=tallies.imputed_by_analysis,
         left_out=left_out,
+        se_counts=tallies.se_counts,
     )
 
 
@@ -900,9 +906,22 @@ def _write_completed_manifest(
             n_missing_imputation_failed=arrays.n_missing_imputation_failed,
             **{SE_OUT_OF_RANGE_KEY: arrays.left_out.provenance()},
             **axis.panel_placement,
+            **_se_exceptions_entry(arrays, axis),
         ),
     )
     staged.write_manifest(_record_effective_dense_chunk_shape(completed_manifest, staged))
+
+
+def _se_exceptions_entry(arrays: _CompletedArrays, axis: _UnionAxis) -> dict[str, Any]:
+    """`provenance.completion.se_exceptions` for a residual SE plane, logged as
+    Ragged completion logs it: each Analysis's share, and those over budget (#390)."""
+    if arrays.se_counts is None:
+        return {}
+    record = se_exception_record(
+        arrays.se_counts, [analysis.analysis_id for analysis in axis.src_analyses]
+    )
+    report_se_exceptions(record, where="complete-dense")
+    return {"se_exceptions": record}
 
 
 def _record_effective_dense_chunk_shape(
@@ -1308,6 +1327,8 @@ class _BandOutcome:
     #: (D5), for the parent to log (D8), and how many cells they are at.
     dropped: np.ndarray
     n_conflicted_cells: int
+    #: The band's SEs held as exact exceptions per Analysis, None unless residual.
+    se_counts: SeExceptionCounts | None
 
 
 def _complete_band(plan: _BandPlan, band: int) -> _BandOutcome:
@@ -1326,7 +1347,7 @@ def _complete_band(plan: _BandPlan, band: int) -> _BandOutcome:
         impute_mask=plan.impute_mask,
     )
     n_failed = _count_band_imputation_failed(cells.z, plan.on_panel, r0, r1)
-    codes, tables, left_out, left_out_off_panel = _encode_band(plan, cells, r0)
+    codes, tables, left_out, left_out_off_panel, se_counts = _encode_band(plan, cells, r0)
     # An off-panel cell the encode leaves out is a cell the release holds no value at.
     n_missing_off_panel += left_out_off_panel
     del cells
@@ -1336,6 +1357,7 @@ def _complete_band(plan: _BandPlan, band: int) -> _BandOutcome:
         n_failed, tables,
         dropped,
         n_conflicted,
+        se_counts,
     )
 
 
@@ -1501,11 +1523,18 @@ def _band_planes(plan: _BandPlan) -> tuple[str, ...]:
 
 def _encode_band(
     plan: _BandPlan, cells: CellValues, r0: int
-) -> tuple[dict[str, np.ndarray], SideTables, tuple[np.ndarray, np.ndarray], np.ndarray]:
+) -> tuple[
+    dict[str, np.ndarray],
+    SideTables,
+    tuple[np.ndarray, np.ndarray],
+    np.ndarray,
+    SeExceptionCounts | None,
+]:
     """Judge and encode the band a step at a time: each plane's codes, the
     band's side-table entries, per Analysis the cells it left out for an SE
     above `float16`'s range and how many of those were flagged imputed, and how
-    many of those cells sit on off-panel rows.
+    many of those cells sit on off-panel rows; and, under a residual SE plane, the
+    SEs held as exact exceptions per Analysis.
 
     Each step is placed at its own rows, so a cell's code and its side-table
     entry are the ones a whole-band encode gives it.
@@ -1519,6 +1548,7 @@ def _encode_band(
     se_out_of_range = np.zeros(plan.n_analyses, dtype=np.int64)
     imputed_out_of_range = np.zeros(plan.n_analyses, dtype=np.int64)
     off_panel_left_out = np.zeros(plan.n_analyses, dtype=np.int64)
+    se_counts = SeExceptionCounts.zeros(plan.n_analyses) if plan.codec.plan.se.is_residual else None
     for s0, s1 in plan.steps(n_rows):
         step = CellValues(
             cells.z[s0:s1],
@@ -1530,11 +1560,20 @@ def _encode_band(
             step,
             Placement.band(r0 + s0, r0 + s1, plan.n_analyses),
             where=f"complete-dense, rows {r0 + s0:,} to {r0 + s1:,}",
+            # Every cell not flagged imputed was decoded from the source Store,
+            # so its EAF and SE must decode to themselves (#301, #390).
+            carried=None if step.imputed is None else np.asarray(step.imputed) == 0,
         )
         se_out_of_range += encoded.storable.se_out_of_range
         imputed_out_of_range += encoded.storable.imputed_out_of_range
         off = plan.on_panel[r0 + s0 : r0 + s1] == 0
         off_panel_left_out += (~encoded.storable.stored[off]).sum(axis=0, dtype=np.int64)
+        if se_counts is not None:
+            assert encoded.imputed is not None
+            se_counts.add(
+                encoded.se, np.broadcast_to(np.arange(plan.n_analyses), encoded.se.shape),
+                encoded.imputed,
+            )
         held = {"z": encoded.z, "se": encoded.se, "imputed": encoded.imputed, "eaf": encoded.eaf}
         for name in codes:
             codes[name][s0:s1] = held[name]
@@ -1545,7 +1584,7 @@ def _encode_band(
         ):
             builder.add(table.index, table.value)
     tables = SideTables(z_overflow.table(), eaf_exceptions.table(), se_exceptions.table())
-    return codes, tables, (se_out_of_range, imputed_out_of_range), off_panel_left_out
+    return codes, tables, (se_out_of_range, imputed_out_of_range), off_panel_left_out, se_counts
 
 
 def _write_band(plan: _BandPlan, codes: dict[str, np.ndarray], r0: int, r1: int) -> None:
@@ -1565,8 +1604,13 @@ class _BandTallies:
     imputed_by_analysis: np.ndarray
     total_imputed: int = 0
     n_missing_imputation_failed: int = 0
+    se_counts: SeExceptionCounts | None = None
 
     def add(self, outcome: _BandOutcome) -> None:
+        if outcome.se_counts is not None:
+            if self.se_counts is None:
+                self.se_counts = SeExceptionCounts.zeros(len(outcome.imputed_by_analysis))
+            self.se_counts.merge(outcome.se_counts)
         self.n_missing_off_panel += outcome.n_missing_off_panel
         self.se_out_of_range += outcome.se_out_of_range
         self.imputed_out_of_range += outcome.imputed_out_of_range

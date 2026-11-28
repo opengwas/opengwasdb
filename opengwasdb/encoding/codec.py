@@ -12,7 +12,7 @@ is coded against.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, ClassVar, TypeVar, cast
 
@@ -110,6 +110,26 @@ def require_se_in_range(values: np.ndarray, *, where: str) -> None:
 _LOG_SE_BOUND_FLOOR = float(np.log(SE_FLOAT16_MAX)) - 1e-6
 
 
+def keep_if_decodes(
+    held: np.ndarray,
+    exact: np.ndarray | None,
+    read: Callable[[np.ndarray], np.ndarray],
+    values: np.ndarray,
+) -> None:
+    """The rule SE and EAF share for a carried cell (issues #301, #390), in place.
+
+    A cell that is `exact` -- decoded from another Store, so it must come back as the
+    `float32` it was -- stays `held` as a code only if the value its code decodes to
+    equals it; otherwise it is cleared, to become an exact exception. `read(judged)`
+    is each plane's own decoder, asked for the judged cells only.
+    """
+    if exact is None:
+        return
+    judged = held & np.broadcast_to(np.asarray(exact, dtype=bool), values.shape)
+    if np.any(judged):
+        held[judged] = read(judged) == values[judged].astype(np.float32)
+
+
 def se_residual_codes(
     values: np.ndarray,
     eaf: np.ndarray,
@@ -155,9 +175,7 @@ def se_residual_codes(
     )
     with np.errstate(invalid="ignore"):
         decoded_log = read + codes * step
-    if exact is not None:
-        judged = held & np.broadcast_to(np.asarray(exact, dtype=bool), v.shape)
-        held[judged] = se_from_log(decoded_log[judged]) == v[judged].astype(np.float32)
+    keep_if_decodes(held, exact, lambda judged: se_from_log(decoded_log[judged]), v)
     near = held & (decoded_log > _LOG_SE_BOUND_FLOOR)
     held[near] = ~se_above_bound(se_from_log(decoded_log[near]))
     exceptional = present & ~held
@@ -203,7 +221,6 @@ def _lengths(named: Sequence[tuple[str, np.ndarray]]) -> str:
     if len(described) == 1:
         return described[0]
     return ", ".join(described[:-1]) + " and " + described[-1]
-
 
 
 class SparseExactBuilder:
@@ -729,6 +746,23 @@ class StoreCodec(StoreDecoder):
         out[missing] = np.float32(np.nan)
         return out
 
+    def _eaf_reader(
+        self, codes: np.ndarray, baseline: np.ndarray
+    ) -> Callable[[np.ndarray], np.ndarray]:
+        """What the one EAF decoder returns for `codes`, at the cells asked for."""
+
+        def read(judged: np.ndarray) -> np.ndarray:
+            read_back: np.ndarray = self.decode_eaf(
+                np.where(judged, codes, 0.0).astype(np.int8),
+                baseline=baseline,
+                imputed=np.zeros(codes.shape, np.uint8),
+                reference=np.zeros(codes.shape, np.float32),
+            )
+            at_judged: np.ndarray = read_back[judged]
+            return at_judged
+
+        return read
+
     def encode_eaf(
         self,
         values: np.ndarray,
@@ -736,8 +770,12 @@ class StoreCodec(StoreDecoder):
         baseline: np.ndarray | None = None,
         positions: PositionSource = None,
         exceptions: EafExceptionBuilder | None = None,
+        exact: np.ndarray | None = None,
     ) -> np.ndarray:
         """Frequencies -> stored bytes.
+
+        `exact` marks carried cells, as `encode_se`'s does (#390): one whose code
+        would decode to another `float32` is an exact exception.
 
         `baseline` is the per-*cell* baseline -- the variant's `eaf_baseline`
         already gathered onto the cells being written -- because the codec does
@@ -751,18 +789,7 @@ class StoreCodec(StoreDecoder):
         """
         v = np.asarray(values, dtype=np.float64)
         absent = np.isnan(v)
-        # Checked before the kind is consulted: an out-of-range frequency is
-        # malformed whether the plane that would hold it is `float32` or a
-        # residual, and a `float32` plane that accepted it would carry it all
-        # the way to a query (spec §6a).
-        invalid = ~absent & (~np.isfinite(v) | (v < 0.0) | (v > 1.0))
-        if np.any(invalid):
-            example = v[invalid].ravel()[:3].tolist()
-            raise ValueError(
-                f"cannot store {example} as an effect allele frequency: a value outside "
-                "[0, 1] is not a frequency, and must fail the build rather than be "
-                "encoded as something (ADR 0036 §9)"
-            )
+        _refuse_non_frequencies(v, absent)
         if not self.encoding.eaf.is_residual:
             return v.astype(np.float32)
 
@@ -780,6 +807,7 @@ class StoreCodec(StoreDecoder):
             residual = logit(v) - logit(b)
             codes = np.rint(residual / self.encoding.eaf.step)
         codable = ~absent & np.isfinite(codes) & (codes >= EAF_CODE_MIN) & (codes <= EAF_CODE_MAX)
+        keep_if_decodes(codable, exact, self._eaf_reader(codes, b), v)
         out = np.where(codable, codes, np.float64(EAF_EXCEPTION))
         out[absent] = EAF_ABSENT
         exceptional = ~absent & ~codable
@@ -794,6 +822,21 @@ class StoreCodec(StoreDecoder):
                 v[exceptional].astype(np.float32),
             )
         return out.astype(np.int8)
+
+
+def _refuse_non_frequencies(v: np.ndarray, absent: np.ndarray) -> None:
+    """Fail a value outside `[0, 1]`, before the plane's kind is consulted: it is
+    malformed whether the plane that would hold it is `float32` or a residual, and
+    a `float32` plane that accepted it would carry it all the way to a query
+    (spec §6a)."""
+    invalid = ~absent & (~np.isfinite(v) | (v < 0.0) | (v > 1.0))
+    if np.any(invalid):
+        example = v[invalid].ravel()[:3].tolist()
+        raise ValueError(
+            f"cannot store {example} as an effect allele frequency: a value outside "
+            "[0, 1] is not a frequency, and must fail the build rather than be "
+            "encoded as something (ADR 0036 §9)"
+        )
 
 
 def write_exact_table(
