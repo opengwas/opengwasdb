@@ -108,7 +108,13 @@ from opengwasdb.variants.routing import (
     route_variants,
 )
 from opengwasdb.variants.routing.keys import routing_key
-from opengwasdb.variants.routing.lift import LiftDrops, lifted_off_primary
+from opengwasdb.variants.routing.lift import (
+    NO_LIFTED_AWAY,
+    LiftDrops,
+    LiftedAway,
+    LiftedAwayReason,
+    lifted_away,
+)
 
 log = logging.getLogger(__name__)
 
@@ -314,13 +320,14 @@ class _PreparedBuild:
     table: RouteTable
     #: Each Analysis's declared INFO and MAF filters, by Analysis id (D2).
     rules: Mapping[str, AnalysisRules] = field(default_factory=dict)
-    #: The routing keys of the sites a lift placed off the primary assembly (#376).
-    off_primary: frozenset[str] = frozenset()
+    #: The routing keys of the sites a lift placed where no Store row can be, each with
+    #: the Admission reason its rows are counted under (#376, #410).
+    lifted_away: LiftedAway = NO_LIFTED_AWAY
     #: The sites a lift collision dropped (#325): their keys count their rows, and
     #: the Admission record names each.
     lift_drops: LiftDrops = LiftDrops()
     #: The chain a single-pass build lifts its hg19 Analyses' unmatched rows by, to
-    #: tell a lift's off-primary drops from `off_axis` ones; None for a two-pass
+    #: tell a lift's drops (`lifted_away`) from `off_axis` ones; None for a two-pass
     #: build, whose union has lifted every site already (#376).
     unmatched_lift: UnmatchedLift | None = None
     #: The ``--variant-reference`` a single-pass build was given, or None for
@@ -452,9 +459,9 @@ def _prepare_axis(
         variant_reference=str(variant_reference) if variant_reference is not None else None,
         column_map=column_map_provenance(manifest_rows),
         rules=rules,
-        off_primary=routing.off_primary,
+        lifted_away=routing.lifted_away,
         lift_drops=routing.lift_drops,
-        # A routing that placed every site knows its off-primary lifts already.
+        # A routing that placed every site knows where its lifts landed already.
         unmatched_lift=(
             None
             if routing.placed_every_site
@@ -476,7 +483,7 @@ class _Pass2Context:
     record: AdmissionRecord
     alids: Sequence[str]
     rules: Mapping[str, AnalysisRules]
-    off_primary: frozenset[str] = frozenset()
+    lifted_away: LiftedAway = NO_LIFTED_AWAY
     unmatched_lift: UnmatchedLift | None = None
     lift_collided: frozenset[str] = frozenset()
 
@@ -485,7 +492,8 @@ class _Pass2Context:
 class UnmatchedLift:
     """How a single-pass build tells a lift's drops from `off_axis` ones: its hg19
     Analyses' unmatched rows are lifted by ``chain_file``, and those the chain
-    places off the primary assembly are counted as `lift_off_primary` (#376).
+    places where no Store row can be are counted under the reason `split_lifted`
+    gives (#376, #410).
     ``grch38_sources`` are the Analyses already on GRCh38, whose declaring a key
     makes it two loci that no row of is a lift's drop. ``checked`` is the keys a
     process has already looked up in them, and whether one declares each, so a
@@ -516,29 +524,38 @@ def _declared_by_grch38(keys: Collection[str], lift: UnmatchedLift) -> set[str]:
     return {key for key in keys if lift.checked[key]}
 
 
-def _unmatched_off_primary(
+def _unmatched_lifted_away(
     keys: Sequence[str], row: ManifestRow, context: _Pass2Context
-) -> frozenset[str]:
-    """The routing keys among ``keys`` that this Analysis's lift placed off the
-    primary assembly, which are dropped as `lift_off_primary`.
+) -> LiftedAway:
+    """The routing keys among ``keys`` that this Analysis's lift placed where no Store
+    row can be, each with the reason its rows are dropped under (`split_lifted`).
 
     Only an hg19 Analysis's rows were lifted. A two-pass build's union has placed
     every site and settled the keys both assemblies declare; a single-pass build's
     candidates are the union's too (a stale reference's) and the unmatched rows the
-    chain lifts onto the alt contig, less any key a GRCh38 Analysis declares, as
-    the Hybrid fold leaves them (two loci, `off_axis`)."""
+    chain lifts onto an alt contig or where GRCh38 has no sequence, less any key a
+    GRCh38 Analysis declares, as the Hybrid fold leaves them (two loci, `off_axis`)."""
     if row.source_assembly != "hg19":
-        return frozenset()
+        return NO_LIFTED_AWAY
     lift = context.unmatched_lift
     if lift is None:
-        return context.off_primary
+        return context.lifted_away
     if not keys:
-        return frozenset()
+        return NO_LIFTED_AWAY
+    candidates = _known_among(keys, context.lifted_away) | _lift_unmatched(keys, lift)
+    declared = _declared_by_grch38(candidates.keys(), lift)
+    return {key: reason for key, reason in candidates.items() if key not in declared}
+
+
+def _known_among(keys: Sequence[str], known: LiftedAway) -> dict[str, LiftedAwayReason]:
+    """The ``keys`` the routing already knows a lift placed where no row can be."""
+    return {key: known[key] for key in keys if key in known}
+
+
+def _lift_unmatched(keys: Sequence[str], lift: UnmatchedLift) -> dict[str, LiftedAwayReason]:
+    """The unmatched routing ``keys`` the chain places where no Store row can be."""
     sites = [(c, int(p), r, a) for c, p, r, a in (key.split(":") for key in keys)]
-    candidates = (context.off_primary & set(keys)) | lifted_off_primary(
-        sites, chain_file=lift.chain_file
-    )
-    return frozenset(candidates - _declared_by_grch38(candidates, lift))
+    return lifted_away(sites, chain_file=lift.chain_file)
 
 
 def _route_and_spill(
@@ -568,7 +585,7 @@ def _route_and_spill(
         record_duplicates(gate, placed, context.alids)
         gate.unplaced_unmatched(
             routed.unmatched,
-            _unmatched_off_primary(routed.unmatched.keys, row, context),
+            _unmatched_lifted_away(routed.unmatched.keys, row, context),
             context.lift_collided,
             lifted=row.source_assembly == "hg19",
         )
@@ -631,7 +648,7 @@ def _spill_columns(
     )
     context = _Pass2Context(
         prepared.table, spill_dir, record, prepared.axis.alids, prepared.rules,
-        prepared.off_primary, prepared.unmatched_lift, prepared.lift_drops.keys,
+        prepared.lifted_away, prepared.unmatched_lift, prepared.lift_drops.keys,
     )
     left_out = np.zeros(len(prepared.axis.analyses), dtype=np.int64)
     columns = fork_each(_route_and_spill, context, tasks, n_workers)

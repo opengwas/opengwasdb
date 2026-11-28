@@ -606,18 +606,34 @@ class TestRefusals:
             resume_hybrid_build(checkpoint_dir)
         assert not store.exists(), "a refused resume publishes nothing"
 
-    def test_a_recorded_axis_without_its_off_primary_keys_is_refused(self, tmp_path):
-        """A current-format checkpoint always writes the keys a lift placed off the
-        primary assembly, an empty file when none; a missing one is a torn record,
+    def test_a_recorded_axis_without_its_lifted_away_keys_is_refused(self, tmp_path):
+        """A current-format checkpoint always writes the keys a lift placed where no
+        Store row can be, an empty file when none; a missing one is a torn record,
         and reading it as empty would publish uncounted alt-contig ALIDs (#376)."""
-        from opengwasdb.layouts.hybrid.build import _recorded_off_primary
+        from opengwasdb.layouts.hybrid.build import _recorded_lifted_away
         from opengwasdb.layouts.hybrid.checkpoint import CheckpointState
 
         state = CheckpointState(path=tmp_path, params={}, completed=())
-        with pytest.raises(ValueError, match="axis_off_primary.txt.*Start the build again"):
-            _recorded_off_primary(state)
-        (tmp_path / "axis_off_primary.txt").write_text("", encoding="utf-8")
-        assert _recorded_off_primary(state) == frozenset()
+        with pytest.raises(ValueError, match="axis_lifted_away.tsv.*Start the build again"):
+            _recorded_lifted_away(state)
+        (tmp_path / "axis_lifted_away.tsv").write_text("", encoding="utf-8")
+        assert _recorded_lifted_away(state) == {}
+
+    def test_a_recorded_lifted_away_key_keeps_its_reason(self, tmp_path):
+        """Each key is read back with the reason its rows are counted under (#410): a key
+        with no reason is refused, since the record could not say why it was dropped."""
+        from opengwasdb.layouts.hybrid.build import _recorded_lifted_away
+        from opengwasdb.layouts.hybrid.checkpoint import CheckpointState
+
+        state = CheckpointState(path=tmp_path, params={}, completed=())
+        path = tmp_path / "axis_lifted_away.tsv"
+        path.write_text("1:5:A:G\tin_assembly_gap\n5:9:C:T\tlift_off_primary\n", encoding="utf-8")
+        assert _recorded_lifted_away(state) == {
+            "1:5:A:G": "in_assembly_gap", "5:9:C:T": "lift_off_primary",
+        }
+        path.write_text("1:5:A:G\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="not a key and a reason"):
+            _recorded_lifted_away(state)
 
     def test_torn_phase_record_is_refused(self, tmp_path, monkeypatch):
         """A marker set with a gap cannot come from a build this code ran."""

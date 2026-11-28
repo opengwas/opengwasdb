@@ -38,8 +38,11 @@ from opengwasdb.variants.routing.keys import (
     source_alid,
 )
 from opengwasdb.variants.routing.lift import (
+    NO_LIFTED_AWAY,
     LiftCollisions,
     LiftDrops,
+    LiftedAway,
+    LiftedAwayReason,
     UnionPlacement,
     collided_sites,
     find_lift_collisions,
@@ -109,7 +112,9 @@ class VariantRouting:
 
     ``lift_drops`` is each source site dropped because another source locus lifted
     onto its ALID (#325), by both identities, and the routing keys by which Pass 2
-    counts their rows as `lift_collision`.
+    counts their rows as `lift_collision`. ``lifted_away`` is the routing key of each
+    site a lift placed where no Store row can be (Lifted Away), with the reason Pass 2
+    counts its rows under (`split_lifted`, #376, #410).
 
     ``placed_every_site`` says Pass 1 placed every source site, as a two-pass build
     does: a row the site map does not hold is one the routing dropped (a failed or
@@ -125,7 +130,7 @@ class VariantRouting:
         axis: Sequence[str] | None,
         names: RoutedNames,
         stats: Pass1Stats,
-        off_primary: frozenset[str] = frozenset(),
+        lifted_away: LiftedAway = NO_LIFTED_AWAY,
         lift_drops: LiftDrops | None = None,
         placed_every_site: bool = False,
     ) -> None:
@@ -134,7 +139,7 @@ class VariantRouting:
         self._axis = axis
         self.names = names
         self.stats = stats
-        self.off_primary = off_primary
+        self.lifted_away = lifted_away
         self.lift_drops = lift_drops if lift_drops is not None else LiftDrops()
         self.placed_every_site = placed_every_site
 
@@ -266,7 +271,7 @@ def _route_by_union(
         placed.lookup, placed.reoriented,
         axis=None if reference is None else reference.alids,
         names=names, stats=union_pass.stats,
-        off_primary=frozenset(placed.off_primary),
+        lifted_away=placed.away,
         lift_drops=LiftDrops.of(placed.collisions, rsid_by_site.lifted),
         placed_every_site=True,
     )
@@ -336,9 +341,9 @@ class _UnionPass:
 
 def _without_off_primary_lifts(
     reference: VariantReference,
-) -> tuple[VariantReference, frozenset[str]]:
+) -> tuple[VariantReference, LiftedAway]:
     """``reference`` less the source sites a lift placed on an alt, random or
-    unplaced contig, and those sites' routing keys (#376).
+    unplaced contig, and those sites' routing keys, each `LiftedAwayReason.OFF_PRIMARY` (#376).
 
     An extraction since #376 leaves such a site out, but one made before it routes
     an hg19 row onto ``11_KI270927v1_alt:…``. A site whose own contig is not the
@@ -347,7 +352,7 @@ def _without_off_primary_lifts(
     sites reach. A site on an alt contig of its own assembly is a chromosome."""
     stale = _lifted_off_primary_sites(reference)
     if not stale:
-        return reference, frozenset()
+        return reference, NO_LIFTED_AWAY
     trimmed = _without_sites(reference, stale)
     log.warning(
         "%d source key(s) of the Variant Reference were lifted onto an alt, random or "
@@ -355,7 +360,7 @@ def _without_off_primary_lifts(
         "ALID(s) only they reach",
         len(stale), len(reference.alids) - len(trimmed.alids),
     )
-    return trimmed, frozenset(routing_key(site) for site in stale)
+    return trimmed, {routing_key(site): LiftedAwayReason.OFF_PRIMARY for site in stale}
 
 
 def _without_sites(reference: VariantReference, sites: set[SourceKey]) -> VariantReference:
@@ -515,7 +520,7 @@ def _route_by_reference(
         axis=reference.alids,
         names=names,
         stats=union_pass.stats,
-        off_primary=off_primary,
+        lifted_away=off_primary,
         lift_drops=lift_drops,
     )
 
