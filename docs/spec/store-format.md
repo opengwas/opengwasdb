@@ -280,6 +280,33 @@ release is the list of associations kept, so absence states itself and it MAY
 declare any of the four. Validators reject a release outside this rule (ADR
 0064).
 
+### 2b. Release lineage (`provenance.lineage`)
+
+A release written by `opengwasdb splice-release` (ADR 0109; #521, #522) is a new release
+of the same Store. It has a fresh `release_id` and `created_at`, and it records in
+`provenance.lineage` the releases it derives from: a list, oldest first, with one entry
+per splice. The first splice of a release starts the list, and each later splice copies
+it and appends one entry. Root and Dense Component manifests carry the same list. A
+release that was never spliced has no `lineage` key.
+
+| Key of an entry | Meaning |
+|---|---|
+| `source_release_id` | the release this splice read |
+| `increment_release_id` | the Increment whose Analyses it added, or `null` when it only dropped |
+| `added`, `dropped` | `analysis_id` lists; an id in both was replaced |
+| `n_analyses_before`, `n_analyses_after` | Analysis counts of the source and of this release |
+| `reason` | the operator's free text, e.g. a Release Erratum's reference, or `null` |
+| `at`, `tool`, `opengwasdb_version`, `opengwasdb_git_hash` | when and by what the splice ran |
+
+`lineage` lives in `provenance`, not at the top level. Some writers rewrite a manifest
+through the Store Reader's manifest model, which drops top-level keys it does not know, and
+`provenance` is carried whole (ADR 0109 §9). `analysis_index` and `variant_index` are per
+release (ADR 0002, ADR 0109 §2): no entry records an index, and an Analysis is followed
+across releases by `analysis_id`. The field moves no `format_version` (§21.0). The rule
+`manifest.lineage`, added with #521, holds the last entry to the release:
+`n_analyses_after` equals `n_analyses_before − |dropped| + |added|` and the row count of
+`analyses.tsv`, every added id is a row, and no dropped id that was not re-added is.
+
 ## 3. Identity and terminology
 
 An **Analysis** is one statistical analysis of one Trait. An Analysis produces associations between that Trait and variants.
