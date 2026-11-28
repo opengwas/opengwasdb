@@ -104,6 +104,26 @@ def write_collision_chain(path: Path) -> Path:
     return path
 
 
+def write_identity_collision_chain(path: Path) -> Path:
+    """A real chain that leaves one hg19 locus where it is and lifts another onto it.
+
+    Chain A maps hg19 chr1 ``[0, 1000)`` forward onto ``[5000, 6000)``; chain B maps
+    ``[5000, 6000)`` onto itself. Both are forward:
+
+    * hg19 501 lifts to hg38 5501;
+    * hg19 5501 lifts to hg38 5501 too, its own coordinate -- the collision, whose
+      second key an artifact cannot tell from a GRCh38 source's key at that ALID.
+    """
+    path.write_text(
+        f"chain 1000 chr1 {STRAND_CHAIN_SIZE} + 0 1000 "
+        f"chr1 {STRAND_CHAIN_SIZE} + 5000 6000 1\n1000\n\n"
+        f"chain 900 chr1 {STRAND_CHAIN_SIZE} + 5000 6000 "
+        f"chr1 {STRAND_CHAIN_SIZE} + 5000 6000 2\n1000\n\n",
+        encoding="utf-8",
+    )
+    return path
+
+
 def write_reverse_collision_chain(path: Path) -> Path:
     """A real chain whose forward block and reverse block image one hg38 position.
 

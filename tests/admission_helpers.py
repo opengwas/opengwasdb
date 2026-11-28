@@ -85,6 +85,12 @@ def record_analyses(store: Path) -> list[dict]:
     return analyses
 
 
+def lift_collision_ledger(store: Path) -> list[str]:
+    """A Store's ``lift_collisions.tsv``, one line per dropped source, header first."""
+    path = admission_record_for(store) / "lift_collisions.tsv"
+    return path.read_text(encoding="utf-8").splitlines()
+
+
 def stage_part(record: Path, index: int, stage: str) -> dict:
     """What a later stage of a build wrote for one Analysis: its part."""
     part: dict = json.loads((record / "parts" / f"{index}.{stage}.json").read_text("utf-8"))

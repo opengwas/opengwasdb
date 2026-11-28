@@ -413,9 +413,19 @@ return a lifted group with two loci on one ALID. A dropped site is still a lifte
 both-assemblies rule: a GRCh38 source that spells its key is dropped with it, so no
 dropped source's statistics route onto another row by its raw key. A build routed by
 a Variant Reference that names no rsids records the collisions its harvest's lift
-finds, and counts the rows of those the reference does not route; a reference frozen
-from an extraction before #325 is not re-checked, and may still route two loci onto
-one ALID. A plain ALID list routes an hg19 source's rows by identity, as if on the Store's assembly; that routing is #260's, and the collision rule reaches it once that lift goes through `place_union`. Each dropped source is recorded by both identities, in
+finds, and counts the rows of those the reference does not route. A Variant Reference
+artifact is checked when it is read for routing: an ALID it routes from two or more lifted
+source loci loses all of those source keys, which are dropped and recorded
+as a lift collision is, and the ALID stays on the axis with no source key reaching it
+(#260). A key is lifted when it is not at its ALID's own `(chromosome, position)`, since a
+GRCh38 key always is; when every source of the build is hg19, every key is. The artifact
+does not say which assembly spelled a key at that locus, so in a mixed manifest one that
+shares its ALID with a moved key is lifted where the build's chain, reading its coordinate
+as hg19, leaves it in place, and is a GRCh38 key where the chain places it elsewhere or
+nowhere. An extraction made before #260 may hold such an ALID. `extract-variant-reference` applies the rule itself, held to the lifted sites, once every site of an ALID has met in its post-lift window: each lifted source of a collided ALID is left out of the artifact and returned, with its ALID and own rsID, and a lifted site the both-assemblies rule drops still collides there, as in `place_union`. The artifact records no dropped key, so a build that reads it as given (it names its rsIDs) counts those sources' rows `off_axis`, or a Hybrid fold finds the collision itself. Every build counts the rows of
+a site its routing dropped in Pass 2, the Hybrid fold included: a fold never meets one of
+them alone, to place it on the ALID. A reference with no source keys routes an hg19 source
+through `place_union` (below), so the rule reaches it as it reaches a two-pass build. Each dropped source is recorded by both identities, in
 `lift_collisions.tsv` beside the Admission record's `admission.json` (`target_alid`,
 `source_key`, `rsid`, one row per source the build dropped rows of, never one it merely found colliding; the source key is spelled as its source wrote it, and the rsID is the one its own hg19 sources named it, empty where they named none, never a GRCh38 source's. The Hybrid fold's spill keeps a key upper-cased, so it takes both from what its harvest's lift recorded for that source, and refuses a site that lift did not drop; a fold under a reference that names its own rsIDs harvests nothing, and records the upper-cased key with an empty rsID), and each row of it is dropped,
 logged by source key and counted, per Analysis, as `lift_collision` (or, for a row of a source already on the Store's assembly that spells a dropped site's key, `lift_ambiguous`) (Admission rules
@@ -424,6 +434,28 @@ and counted by neither `n_unmapped` nor a manifest field). There is no `validate
 holds only the ALIDs that survived, and cannot say which source loci were dropped, so the
 guarantee is the build's. A release built before #325 may hold such an ALID, with its
 `source_alid` blank and the statistics of one source under the rsID of the other.
+
+**A Variant Reference with no source keys lifts an hg19 source (#260).** A plain ALID
+list or a Store Variant Table names hg38 ALIDs and no source coordinates, so it can route
+a row by identity only where the row's own `(chromosome, position, ref, alt)` is its hg38
+ALID: a GRCh38 source's. A single-pass build given one, with any hg19-declared source,
+MUST NOT route that source's rows by identity, since an hg19 coordinate that is also an
+ALID on the list is another locus. It routes every source site as the two-pass build
+does: Pass 1 reads the sources, `place_union` lifts the hg19 group with the build's chain
+and `--liftover-failure-threshold` (a failure rate above it refuses the build; below it,
+each failed row is dropped and counted `off_axis`), applies the lift-collision and
+both-assemblies rules, and passes GRCh38 sites through. The reference stays the axis
+and decides which ALIDs exist. A site placed on an ALID the reference does not list is
+handled as the two-pass build handles an off-panel variant: in `build-hybrid` it goes to
+the Ragged Overflow before Pass 2 and nothing is folded, so the release is the one
+`--reference-panel` with the same list builds, Ragged Overflow included; in
+`build-dense-vcf` its rows are dropped and counted `off_axis`, so the release is the
+two-pass release restricted to the reference's ALIDs, with each listed ALID no source
+reaches stored empty. Names follow the two-pass rule (the first rsid of the sites placed
+on each ALID) when the reference names none, and are the reference's, as given, when it
+names some. A manifest of GRCh38 sources alone is routed by identity, as before, and a
+reference that names its rsids then reads no source. A source declared under any other
+assembly is refused, since neither identity nor the lift places it.
 
 A GWAS Catalog row its harmoniser placed nowhere names no variant (#410). In the
 layout that keeps the study's alleles in the main columns, a row whose `hm_code`
@@ -704,7 +736,10 @@ is part of the contract (issue #255):
   actually observe, while a two-pass `--reference-panel` axis also keeps a
   source variant that has no usable association anywhere. Such a variant is
   absent from the single-pass release rather than present under a wrong name,
-  and both releases answer alike every query the two axes share.
+  and both releases answer alike every query the two axes share. A Hybrid build
+  whose reference has no source keys and whose manifest has an hg19 source
+  routes as the two-pass build does (#260, above), so its axis is the
+  `--reference-panel` axis, that variant included.
 - A build that harvests (that is, a build whose reference names none of its
   variants, or a two-pass build) MUST fail rather than publish a variant table
   that disagrees with the rsids the sources named. Two checks run before

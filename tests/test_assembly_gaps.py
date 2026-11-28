@@ -284,7 +284,8 @@ def test_a_hybrid_build_drops_and_counts_them_too(tmp_path: Path) -> None:
 
 
 def test_a_ragged_ssf_build_drops_and_counts_them_too(tmp_path: Path) -> None:
-    from test_lift_off_primary import _admission, _alids, _ssf_build, _ssf_row
+    from admission_helpers import record_analyses
+    from test_lift_off_primary import _alids, _ssf_build, _ssf_row
 
     rows = [
         _ssf_row("1", 5, "G", "T", "rs_gap"), _ssf_row("1", 9_999, "G", "T", "rs_gap2"),
@@ -293,7 +294,7 @@ def test_a_ragged_ssf_build_drops_and_counts_them_too(tmp_path: Path) -> None:
     ]
     store = _ssf_build(tmp_path, [("a", "GRCh38", rows)])
     assert _alids(store) == {"1:10001:G:T"}
-    (analysis,) = _admission(store)
+    (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {"in_assembly_gap": 2, "past_contig_end": 1}
 
 

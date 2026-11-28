@@ -188,12 +188,26 @@ def _hybrid_two_pass(
     return Built(store, "trait", {ON_PANEL_ALID: -2.0, OFF_PANEL_ALID: -2.0})
 
 
+def _on_panel_artifact(tmp_path: Path) -> Path:
+    """An artifact routing the hg19 on-panel row to its ALID, and nothing else."""
+    from opengwasdb.variants.reference import write_variant_reference
+
+    artifact = tmp_path / "on-panel.variant-ref.tsv.gz"
+    write_variant_reference(
+        artifact, [ON_PANEL_ALID], {("1", HG19_ON_PANEL, "A", "G"): ON_PANEL_ALID}, {},
+        reoriented=(),
+    )
+    return artifact
+
+
 def _hybrid_single_pass(
     tmp_path: Path, declared: Declared, monkeypatch: pytest.MonkeyPatch
 ) -> Built:
-    """A single-pass build whose variant reference names only the on-panel
+    """A single-pass build whose variant reference routes only the on-panel
     variant, so the other is unknown to the route table: Pass 2 spills it
-    off-reference, and the fold lifts it into the Overflow."""
+    off-reference, and the fold lifts it into the Overflow. The reference is an
+    artifact: a plain list would have Pass 1 lift the hg19 rows (#260), and
+    nothing would be folded."""
     spilled: list[int] = []
     real_spill = hybrid_build._off_reference_spill
 
@@ -205,7 +219,7 @@ def _hybrid_single_pass(
     monkeypatch.setattr(hybrid_build, "_off_reference_spill", _counting_spill)
     store = tmp_path / "hybrid-single-pass.opengwasdb"
     build_hybrid_from_vcf_manifest(
-        _vcf_manifest(tmp_path, declared), store, variant_reference=_panel(tmp_path),
+        _vcf_manifest(tmp_path, declared), store, variant_reference=_on_panel_artifact(tmp_path),
         store_id="s", release_id="r", n_workers=1,
     )
     assert sum(spilled) == 1, (

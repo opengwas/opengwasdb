@@ -6,7 +6,7 @@ shape, values, NaN-aware), the same encodings, and the same `manifest.json` and
 `analyses.tsv` apart from `created_at`. Compressed chunk *bytes* are not the
 oracle: Blosc produces different-but-equivalent streams for identical input in
 different processes (#230/#231), so the comparison is on what the store decodes
-to -- `_assert_hybrid_stores_match`, which is also what the Hybrid suite's own
+to -- `assert_hybrid_stores_match`, which is also what the Hybrid suite's own
 serial-versus-parallel comparisons use.
 
 **The footprint ceiling, stated up front.** A checkpoint's cost is dominated by
@@ -33,8 +33,8 @@ from pathlib import Path
 
 import pytest
 from cli_output import normalize_cli_output
+from store_assertions import assert_hybrid_stores_match
 from test_hybrid_build import (
-    _assert_hybrid_stores_match,
     _hybrid_axis_rsids,
     _hybrid_manifest,
     _panel_file,
@@ -167,7 +167,7 @@ def _dir_bytes(path: Path) -> int:
 def _assert_manifests_match(before: Path, after: Path) -> None:
     """Both manifests equal apart from `created_at`, as byte-identity defines.
 
-    `_assert_hybrid_stores_match` covers every decoded array, the variant
+    `assert_hybrid_stores_match` covers every decoded array, the variant
     tables and `analyses.tsv` but deliberately skips the manifests, whose
     `created_at` always differs. This is the other half of the contract, and
     the same comparison the real-data evidence's `verify_227.py` makes.
@@ -195,7 +195,7 @@ class TestCheckpointedBuild:
         assert not checkpoint_dir_for(checked).exists()
         assert list(tmp_path.glob(f".{plain.name}.hybridspill.*")) == []
         assert list(tmp_path.glob(f".{checked.name}.hybridspill.*")) == []
-        _assert_hybrid_stores_match(plain, checked)
+        assert_hybrid_stores_match(plain, checked)
         _assert_manifests_match(plain, checked)
 
     def test_resume_after_fit_crash_matches_uninterrupted(self, tmp_path, monkeypatch):
@@ -220,7 +220,7 @@ class TestCheckpointedBuild:
         assert not checkpoint_dir.exists()
         assert resumed.n_overflow == 1
         assert validate_store(store).ok
-        _assert_hybrid_stores_match(plain, store)
+        assert_hybrid_stores_match(plain, store)
         _assert_manifests_match(plain, store)
 
     def test_resume_preserves_info_score_provenance(self, tmp_path, monkeypatch):
@@ -257,7 +257,7 @@ class TestCheckpointedBuild:
         assert (record / "admission.json").read_bytes() == (
             admission_record_for(plain) / "admission.json"
         ).read_bytes()
-        _assert_hybrid_stores_match(plain, store)
+        assert_hybrid_stores_match(plain, store)
         _assert_manifests_match(plain, store)
 
     def test_resume_refuses_a_record_that_lost_a_part(self, tmp_path, monkeypatch):
@@ -292,7 +292,7 @@ class TestCheckpointedBuild:
 
         resume_hybrid_build(checkpoint_dir_for(store), n_workers=2)
 
-        _assert_hybrid_stores_match(plain, store)
+        assert_hybrid_stores_match(plain, store)
         _assert_manifests_match(plain, store)
 
     def test_resume_does_not_re_measure_the_plan_or_the_axis(self, tmp_path, monkeypatch):
@@ -369,7 +369,7 @@ class TestCheckpointedBuild:
         monkeypatch.undo()
 
         assert validate_store(store).ok
-        _assert_hybrid_stores_match(plain, store)
+        assert_hybrid_stores_match(plain, store)
         _assert_manifests_match(plain, store)
 
     def test_mid_fold_crash_resumes_with_the_harvested_rsids(self, tmp_path, monkeypatch):
@@ -412,7 +412,7 @@ class TestCheckpointedBuild:
 
         assert validate_store(store).ok
         assert _hybrid_axis_rsids(store) == uninterrupted
-        _assert_hybrid_stores_match(plain, store)
+        assert_hybrid_stores_match(plain, store)
         _assert_manifests_match(plain, store)
 
     def test_partial_pass2_resumes_from_scratch_and_matches(self, tmp_path, monkeypatch):
@@ -442,7 +442,7 @@ class TestCheckpointedBuild:
         assert not (checkpoint_dir / "pass2.done").exists()
         resume_hybrid_build(checkpoint_dir)
         assert validate_store(store).ok
-        _assert_hybrid_stores_match(plain, store)
+        assert_hybrid_stores_match(plain, store)
         _assert_manifests_match(plain, store)
 
     def test_failure_log_names_the_checkpoint_and_the_resume(
@@ -756,7 +756,7 @@ class TestCli:
         resumed = CliRunner().invoke(app, [*args, "--resume", "--n-workers", "2"])
         assert resumed.exit_code == 0, resumed.output
         assert validate_store(store).ok
-        _assert_hybrid_stores_match(plain, store)
+        assert_hybrid_stores_match(plain, store)
         _assert_manifests_match(plain, store)
 
     def test_cli_resume_refuses_a_different_parameter(self, tmp_path, monkeypatch):

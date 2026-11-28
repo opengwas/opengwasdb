@@ -376,7 +376,6 @@ def _write_axis(
 
 
 def _routing_authority(
-    manifest_rows: Sequence[ManifestRow],
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
     variant_reference: str | Path | None,
@@ -385,43 +384,26 @@ def _routing_authority(
     if variant_reference is None:
         return LiftedUnion(chain_file, liftover_failure_threshold)
     return FromReference(
-        _load_variant_reference(variant_reference, manifest_rows),
+        _load_variant_reference(variant_reference),
         chain_file,
         liftover_failure_threshold,
     )
 
 
-def _load_variant_reference(
-    variant_reference: str | Path, manifest_rows: Sequence[ManifestRow]
-) -> VariantReference:
-    """Read the reference and note when it cannot resolve the manifest's assembly.
+def _load_variant_reference(variant_reference: str | Path) -> VariantReference:
+    """Read the reference that is this build's axis.
 
     An identity reference (a plain ALID list or a store ``variants.tsv.gz``)
-    carries no source-key mapping, so it resolves only rows already on hg38.
-    The reference is the axis authority and no liftover runs in Pass 2, so a
-    manifest declaring hg19 against one keeps only coordinates that happen to
-    coincide; that is the documented off-reference behaviour, but it is worth
-    saying so rather than letting the shortfall pass unremarked.
+    carries no source-key mapping, so it routes only a GRCh38 row; with an hg19
+    source in the manifest the routing lifts every site as Pass 1 does and the
+    reference stays the axis (issue #260, `route_variants`).
     """
     reference = read_variant_reference(variant_reference)
     log.info(
-        "Single-pass build: variant axis loaded from %s (%d variants); "
-        "Pass 1 variant union and liftover bypassed",
+        "Single-pass build: variant axis loaded from %s (%d variants)",
         variant_reference,
         len(reference.alids),
     )
-    if not reference.explicit_source_keys:
-        non_hg38 = sorted(
-            {row.source_assembly for row in manifest_rows if row.source_assembly != "hg38"}
-        )
-        if non_hg38:
-            log.warning(
-                "Variant reference %s carries no source-key mapping and resolves only hg38 "
-                "coordinates, but the manifest declares %s; variants whose source coordinate "
-                "differs from the reference will be dropped",
-                variant_reference,
-                ", ".join(non_hg38),
-            )
     return reference
 
 
@@ -444,9 +426,7 @@ def _prepare_axis(
     it was written from, and the route table is built -- consuming the
     routing's site map before any worker forks (issue 043).
     """
-    authority = _routing_authority(
-        manifest_rows, chain_file, liftover_failure_threshold, variant_reference
-    )
+    authority = _routing_authority(chain_file, liftover_failure_threshold, variant_reference)
     routing = route_variants(
         [row.source for row in manifest_rows], authority, n_workers=n_workers
     )
@@ -474,13 +454,14 @@ def _prepare_axis(
         rules=rules,
         off_primary=routing.off_primary,
         lift_drops=routing.lift_drops,
+        # A routing that placed every site knows its off-primary lifts already.
         unmatched_lift=(
-            UnmatchedLift(
+            None
+            if routing.placed_every_site
+            else UnmatchedLift(
                 chain_file,
                 tuple(row.source for row in manifest_rows if row.source_assembly == "hg38"),
             )
-            if variant_reference is not None
-            else None
         ),
     )
 

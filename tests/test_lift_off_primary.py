@@ -16,6 +16,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
+from admission_helpers import record_analyses
 from liftover_fixtures import (
     ALT_LIFTED_ROW,
     ALT_TARGET_CONTIG,
@@ -30,6 +31,7 @@ from opengwasdb.admission import admission_record_for
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.store_reader.identity import is_primary_contig
 from opengwasdb.variants.axis import VariantAxis
+from opengwasdb.variants.reference import write_variant_reference
 from opengwasdb.variants.routing import place_sites
 
 #: The alt-lifted row's source key as the Admission record logs it.
@@ -43,11 +45,6 @@ def chain(tmp_path: Path) -> Path:
 
 def _alt_and_primary_rows() -> list[str]:
     return [vcf_row(*ALT_LIFTED_ROW[:4]), vcf_row(*PRIMARY_LIFTED_ROW[:4])]
-
-
-def _admission(store: Path) -> list[Mapping[str, object]]:
-    record = admission_record_for(store)
-    return json.loads((record / "admission.json").read_text(encoding="utf-8"))["analyses"]
 
 
 def _logged(store: Path, analysis: int, stage: str | None = None) -> list[str]:
@@ -71,7 +68,7 @@ def test_dense_drops_a_row_lifted_onto_an_alt_contig_and_counts_it(tmp_path, cha
         liftover_failure_threshold=0.0,
     )
     assert _alids(store) == {PRIMARY_LIFTED_ROW[4]}, "the alt-contig variant is not stored"
-    a, b = _admission(store)
+    a, b = record_analyses(store)
     assert a["dropped"] == {"lift_off_primary": 1}
     assert (a["examined"], a["admitted"]) == (2, 1)
     assert b["dropped"] == {"lift_off_primary": 1}
@@ -89,7 +86,7 @@ def test_dense_keeps_a_grch38_source_row_on_an_alt_contig(tmp_path):
         vcf_manifest(tmp_path, vcfs, assembly="hg38"), store, store_id="s", release_id="r",
     )
     assert _alids(store) == {ALT_LIFTED_ROW[4]}
-    (analysis,) = _admission(store)
+    (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {}
     assert analysis["admitted"] == 1
 
@@ -101,7 +98,7 @@ def test_dense_stores_a_row_lifted_onto_a_primary_contig_as_before(tmp_path, cha
         vcf_manifest(tmp_path, vcfs), store, store_id="s", release_id="r", chain_file=chain,
     )
     assert _alids(store) == {PRIMARY_LIFTED_ROW[4]}
-    (analysis,) = _admission(store)
+    (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {}
     assert (analysis["examined"], analysis["admitted"]) == (1, 1)
 
@@ -154,7 +151,7 @@ def test_ssf_drops_a_row_lifted_onto_an_alt_contig_and_counts_it(tmp_path, chain
         tmp_path, [("a", "GRCh37", rows)], chain_file=chain, liftover_failure_threshold=0.0
     )
     assert _alids(store) == {PRIMARY_LIFTED_ROW[4]}
-    (analysis,) = _admission(store)
+    (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {"lift_off_primary": 1}
     assert (analysis["examined"], analysis["admitted"]) == (2, 1)
     # A GWAS-SSF row is named by its source ALID, as `lift_unmapped`'s are.
@@ -167,7 +164,7 @@ def test_ssf_keeps_a_grch38_source_row_on_an_alt_contig(tmp_path, chain):
     rows = [_ssf_row(ALT_TARGET_CONTIG, 1_000, "G", "A", "rs_alt")]
     store = _ssf_build(tmp_path, [("a", "GRCh38", rows)], chain_file=chain)
     assert _alids(store) == {ALT_LIFTED_ROW[4]}
-    (analysis,) = _admission(store)
+    (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {}
 
 
@@ -175,7 +172,7 @@ def test_ssf_stores_a_row_lifted_onto_a_primary_contig_as_before(tmp_path, chain
     rows = [_ssf_row(*PRIMARY_LIFTED_ROW[:4], "rs_primary")]
     store = _ssf_build(tmp_path, [("a", "GRCh37", rows)], chain_file=chain)
     assert _alids(store) == {PRIMARY_LIFTED_ROW[4]}
-    (analysis,) = _admission(store)
+    (analysis,) = record_analyses(store)
     assert (analysis["dropped"], analysis["admitted"]) == ({}, 1)
 
 
@@ -207,28 +204,38 @@ def _hybrid_build(tmp_path: Path, rows: list[str], *, panel: bool = True, **opti
 def test_hybrid_two_pass_drops_a_row_lifted_onto_an_alt_contig_and_counts_it(tmp_path, chain):
     store = _hybrid_build(tmp_path, _alt_and_primary_rows(), chain_file=chain)
     assert _alids(store) == {PRIMARY_LIFTED_ROW[4]}
-    for analysis in _admission(store):
+    for analysis in record_analyses(store):
         assert analysis["dropped"] == {"lift_off_primary": 1}
         assert (analysis["examined"], analysis["admitted"]) == (2, 1)
     assert _logged(store, 0) == [f"{ALT_KEY}\tlift_off_primary"]
 
 
+@pytest.mark.parametrize(
+    ("kind", "stage"), [("plain", None), ("artifact", "fold")], ids=["plain-list", "artifact"]
+)
 def test_hybrid_single_pass_drops_an_off_reference_row_lifted_onto_an_alt_contig(
-    tmp_path, chain
+    tmp_path, chain, kind, stage
 ):
-    """The reference holds only the primary variant, so the alt row is off-reference and
-    the fold lifts it."""
-    reference = tmp_path / "axis.alid.txt"
-    reference.write_text(f"{PRIMARY_LIFTED_ROW[4]}\n", encoding="utf-8")
+    """The reference holds only the primary variant. An artifact routes that row alone,
+    so the alt row is off-reference and the fold lifts it; a plain list routes every
+    hg19 row by Pass 1's lift (#260), which drops the alt row in Pass 2."""
+    primary = PRIMARY_LIFTED_ROW[4]
+    if kind == "plain":
+        reference = tmp_path / "axis.alid.txt"
+        reference.write_text(f"{primary}\n", encoding="utf-8")
+    else:
+        reference = tmp_path / "axis.variant-ref.tsv.gz"
+        site = (PRIMARY_LIFTED_ROW[0], PRIMARY_LIFTED_ROW[1], *PRIMARY_LIFTED_ROW[2:4])
+        write_variant_reference(reference, [primary], {site: primary}, {}, reoriented=())
     store = _hybrid_build(
         tmp_path, _alt_and_primary_rows(), chain_file=chain, panel=False,
         variant_reference=reference,
     )
-    assert _alids(store) == {PRIMARY_LIFTED_ROW[4]}
-    for analysis in _admission(store):
+    assert _alids(store) == {primary}
+    for analysis in record_analyses(store):
         assert analysis["dropped"] == {"lift_off_primary": 1}
         assert (analysis["examined"], analysis["admitted"]) == (2, 1)
-    assert _logged(store, 0, "fold") == [f"{ALT_KEY}\tlift_off_primary"]
+    assert _logged(store, 0, stage) == [f"{ALT_KEY}\tlift_off_primary"]
 
 
 def test_hybrid_keeps_a_grch38_source_row_on_an_alt_contig(tmp_path):
@@ -245,14 +252,14 @@ def test_hybrid_keeps_a_grch38_source_row_on_an_alt_contig(tmp_path):
         manifest, store, store_id="h", release_id="v1", reference_panel=panel
     )
     assert _alids(store) == {ALT_LIFTED_ROW[4]}
-    (analysis,) = _admission(store)
+    (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {}
 
 
 def test_hybrid_stores_a_row_lifted_onto_a_primary_contig_as_before(tmp_path, chain):
     store = _hybrid_build(tmp_path, [vcf_row(*PRIMARY_LIFTED_ROW[:4])], chain_file=chain)
     assert _alids(store) == {PRIMARY_LIFTED_ROW[4]}
-    for analysis in _admission(store):
+    for analysis in record_analyses(store):
         assert (analysis["dropped"], analysis["admitted"]) == ({}, 1)
 
 
@@ -291,7 +298,7 @@ def _besd_build(tmp_path: Path, prefix: Path, **options) -> Path:
 def test_besd_drops_a_row_lifted_onto_an_alt_contig_and_counts_it(tmp_path, chain):
     store = _besd_build(tmp_path, _besd_prefix(tmp_path), source_build="hg19", chain_file=chain)
     assert _alids(store) == {PRIMARY_LIFTED_ROW[4]}
-    (analysis,) = _admission(store)
+    (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {"lift_off_primary": 1}
     assert (analysis["examined"], analysis["admitted"]) == (2, 1)
     assert _logged(store, 0) == ["esi:0\tlift_off_primary"]
@@ -303,7 +310,7 @@ def test_besd_keeps_a_grch38_source_row_on_an_alt_contig(tmp_path):
     prefix = _besd_prefix(tmp_path, chrom_a=ALT_TARGET_CONTIG)
     store = _besd_build(tmp_path, prefix, source_build="hg38")
     assert _alids(store) == {ALT_LIFTED_ROW[4], PRIMARY_LIFTED_ROW[4]}
-    (analysis,) = _admission(store)
+    (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {}
 
 
@@ -446,7 +453,7 @@ def test_dense_single_pass_counts_a_lifted_alt_row_as_lift_off_primary_not_off_a
     build's row for it is unmatched; the chain, not the axis, lost it (ADR 0072)."""
     store = _dense_single_pass(tmp_path, _extracted_reference(tmp_path, chain), chain)
     assert _alids(store) == {PRIMARY_LIFTED_ROW[4]}
-    (analysis,) = _admission(store)
+    (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {"lift_off_primary": 1}
     assert _logged(store, 0) == [f"{ALT_KEY}\tlift_off_primary"]
 
@@ -457,7 +464,7 @@ def test_dense_drops_a_reference_extracted_before_the_drop_and_counts_it(tmp_pat
     with caplog.at_level(logging.WARNING):
         store = _dense_single_pass(tmp_path, reference, chain)
     assert _alids(store) == {PRIMARY_LIFTED_ROW[4]}, "the alt ALID is not on the axis"
-    (analysis,) = _admission(store)
+    (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {"lift_off_primary": 1}
     assert (analysis["examined"], analysis["admitted"]) == (2, 1)
     assert "lifted onto an alt, random or unplaced contig by the extraction" in caplog.text
@@ -476,7 +483,7 @@ def test_dense_keeps_a_reference_site_on_an_alt_contig_of_its_own_assembly(tmp_p
         release_id="r", variant_reference=reference,
     )
     assert _alids(store) == {ALT_LIFTED_ROW[4]}
-    (analysis,) = _admission(store)
+    (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {}
 
 
@@ -486,7 +493,7 @@ def test_hybrid_drops_a_reference_extracted_before_the_drop_and_counts_it(tmp_pa
         variant_reference=_old_reference(tmp_path),
     )
     assert _alids(store) == {PRIMARY_LIFTED_ROW[4]}
-    for analysis in _admission(store):
+    for analysis in record_analyses(store):
         assert analysis["dropped"] == {"lift_off_primary": 1}
 
 
@@ -511,7 +518,7 @@ def test_dense_a_grch38_row_does_not_take_the_place_of_a_dropped_lifted_one(tmp_
     )
     assert "5:1000:A:G" not in _alids(store)
     assert _alids(store) == {PRIMARY_LIFTED_ROW[4], "3:2000:A:G"}, "other rows place as before"
-    old, new = _admission(store)
+    old, new = record_analyses(store)
     assert new["dropped"] == {"off_axis": 1}, "the GRCh38 row took no place"
     assert old["dropped"] == {"off_axis": 1}
 
@@ -528,7 +535,7 @@ def test_ssf_a_grch38_row_does_not_take_the_place_of_a_dropped_lifted_one(tmp_pa
         chain_file=chain, liftover_failure_threshold=0.5,
     )
     assert "5:1000:A:G" not in _alids(store)
-    old, new = _admission(store)
+    old, new = record_analyses(store)
     assert new["dropped"] == {"lift_ambiguous": 1}, "the GRCh38 row took no place"
     assert old["dropped"] == {"lift_ambiguous": 1}
 
@@ -671,7 +678,7 @@ def _mixed_dense(tmp_path: Path, chain: Path, **options) -> list[Mapping[str, ob
         vcf_manifest(sub, _mixed_assembly_vcfs(sub), assembly={"old": "hg19", "new": "hg38"}),
         store, store_id="s", release_id="r", chain_file=chain, **options,
     )
-    return [analysis["dropped"] for analysis in _admission(store)]
+    return [analysis["dropped"] for analysis in record_analyses(store)]
 
 
 def test_single_pass_dense_counts_a_shared_key_as_two_pass_does(tmp_path, chain):

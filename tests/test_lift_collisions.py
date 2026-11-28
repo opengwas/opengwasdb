@@ -12,32 +12,21 @@ import json
 from pathlib import Path
 
 import pytest
-from liftover_fixtures import vcf_manifest, vcf_row, write_collision_chain
+from admission_helpers import lift_collision_ledger, record_analyses
+from lift_collision_fixtures import (
+    CLEAN,
+    COLLIDED,
+    LEDGER,
+    ROWS,
+    UNNAMED_LEDGER,
+    named_row,
+)
+from liftover_fixtures import vcf_manifest, write_collision_chain
 from residual_fixtures import write_gwas_vcf_with_eaf
-from test_lift_off_primary import _admission, _alids, _logged, _ssf_build, _ssf_row
+from test_lift_off_primary import _alids, _logged, _ssf_build, _ssf_row
 
 from opengwasdb.admission import admission_record_for
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
-
-COLLIDED = "1:5501:A:G"
-CLEAN = "1:6001:C:T"
-
-
-def _named_row(pos: int, ref: str, alt: str, rsid: str) -> str:
-    """A GWAS-VCF row whose ID column is ``rsid``."""
-    return vcf_row("1", pos, ref, alt).replace("\t.\t", f"\t{rsid}\t", 1)
-
-
-#: hg19 501 and 1001 both lift to 1:5501:A:G; 1501 lifts to 1:6001:C:T alone.
-ROWS = [
-    _named_row(501, "A", "G", "rs_first"),
-    _named_row(1_001, "A", "G", "rs_second"),
-    _named_row(1_501, "C", "T", "rs_clean"),
-]
-LEDGER = [
-    f"{COLLIDED}\t1:501:A:G\trs_first",
-    f"{COLLIDED}\t1:1001:A:G\trs_second",
-]
 
 
 def _vcfs(tmp_path: Path):
@@ -46,13 +35,8 @@ def _vcfs(tmp_path: Path):
     }
 
 
-def _collision_file(store: Path) -> list[str]:
-    path = admission_record_for(store) / "lift_collisions.tsv"
-    return path.read_text(encoding="utf-8").splitlines()
-
-
-def _check_record(store: Path, *, stage: str | None = None):
-    analyses = _admission(store)
+def _check_record(store: Path, *, stage: str | None = None, ledger=LEDGER):
+    analyses = record_analyses(store)
     assert analyses, "fixture: the record names Analyses to judge"
     for index, analysis in enumerate(analyses):
         assert analysis["dropped"] == {"lift_collision": 2}
@@ -60,8 +44,8 @@ def _check_record(store: Path, *, stage: str | None = None):
         assert _logged(store, index, stage) == [
             "1:501:A:G\tlift_collision", "1:1001:A:G\tlift_collision"
         ]
-    assert _collision_file(store)[0] == "target_alid\tsource_key\trsid"
-    assert sorted(_collision_file(store)[1:]) == sorted(LEDGER)
+    assert lift_collision_ledger(store)[0] == "target_alid\tsource_key\trsid"
+    assert sorted(lift_collision_ledger(store)[1:]) == sorted(ledger)
 
 
 def test_dense_drops_both_sources_and_counts_each_row(tmp_path):
@@ -90,10 +74,20 @@ def test_hybrid_two_pass_drops_both_sources_and_counts_each_row(tmp_path):
     _check_record(store)
 
 
-def test_hybrid_single_pass_counts_collided_off_reference_rows_in_the_fold(tmp_path):
+def test_hybrid_single_pass_on_a_plain_list_counts_collided_rows_in_pass_2(tmp_path):
+    """A plain list routes hg19 rows by the harvest's lift, which dropped both (#260)."""
     store = _hybrid_single_pass(tmp_path)
     assert _alids(store) == {CLEAN}
-    _check_record(store, stage="fold")
+    _check_record(store)
+
+
+def test_hybrid_fold_counts_collided_off_reference_rows(tmp_path):
+    """A reference that routes 1501 alone and names its rsids harvests nothing, so only
+    the fold lifts 501 and 1001; it finds them colliding and drops both. No source was
+    read for names, so the ledger names each by its key alone."""
+    store = _hybrid_fold(tmp_path)
+    assert _alids(store) == {CLEAN}
+    _check_record(store, stage="fold", ledger=UNNAMED_LEDGER)
 
 
 def test_ragged_ssf_drops_both_sources_and_counts_them_as_collisions(tmp_path):
@@ -106,7 +100,7 @@ def test_ragged_ssf_drops_both_sources_and_counts_them_as_collisions(tmp_path):
     store = _ssf_build(tmp_path, [("a", "GRCh37", rows)], chain_file=chain)
 
     assert _alids(store) == {CLEAN}
-    (analysis,) = _admission(store)
+    (analysis,) = record_analyses(store)
     assert analysis["dropped"] == {"lift_collision": 2}
     assert (analysis["examined"], analysis["admitted"]) == (3, 1)
     assert sorted(_logged(store, 0)) == [
@@ -114,7 +108,7 @@ def test_ragged_ssf_drops_both_sources_and_counts_them_as_collisions(tmp_path):
     ]
     lift = json.loads((store / "manifest.json").read_text(encoding="utf-8"))["provenance"]["lift"]
     assert (lift["n_lifted"], lift["n_unmapped"]) == (3, 0), "collided sites are not unmapped"
-    assert sorted(_collision_file(store)[1:]) == sorted(LEDGER)
+    assert sorted(lift_collision_ledger(store)[1:]) == sorted(LEDGER)
 
 
 @pytest.mark.parametrize("native_rsid", ["rs_aaa_native", "."])
@@ -127,7 +121,7 @@ def test_dense_keeps_no_native_row_a_collided_source_spells(tmp_path, native_rsi
     chain = write_collision_chain(tmp_path / "forward.chain")
     vcfs = {
         "a": write_gwas_vcf_with_eaf(
-            tmp_path / "a.vcf", [_named_row(501, "A", "G", native_rsid)]
+            tmp_path / "a.vcf", [named_row(501, "A", "G", native_rsid)]
         ),
         "b": write_gwas_vcf_with_eaf(tmp_path / "b.vcf", ROWS),
     }
@@ -137,10 +131,10 @@ def test_dense_keeps_no_native_row_a_collided_source_spells(tmp_path, native_rsi
         store_id="s", release_id="r", chain_file=chain,
     )
     assert _alids(store) == {CLEAN}, "1:501:A:G holds no row of either assembly"
-    native, lifted = _admission(store)
+    native, lifted = record_analyses(store)
     assert native["dropped"] == {"lift_ambiguous": 1}
     assert lifted["dropped"] == {"lift_collision": 2}
-    assert sorted(_collision_file(store)[1:]) == sorted(LEDGER)
+    assert sorted(lift_collision_ledger(store)[1:]) == sorted(LEDGER)
 
 
 def test_dense_names_the_row_dropped_not_its_case_folded_sibling(tmp_path):
@@ -148,7 +142,7 @@ def test_dense_names_the_row_dropped_not_its_case_folded_sibling(tmp_path):
     (SE 0, named) is dropped as `se_unusable` and never meets the lift: it shares a's
     Routing Key, but it is not a row the build dropped as a collision."""
     chain = write_collision_chain(tmp_path / "forward.chain")
-    lower = _named_row(501, "a", "g", "rs_lower_zero").replace("0.2:0.1:0.2", "0.2:0:0.2")
+    lower = named_row(501, "a", "g", "rs_lower_zero").replace("0.2:0.1:0.2", "0.2:0:0.2")
     assert "\ta\tg\t" in lower and ":0:" in lower, "fixture: lower-case allele, SE 0"
     vcfs = {
         "a": write_gwas_vcf_with_eaf(tmp_path / "a.vcf", ROWS),
@@ -159,15 +153,15 @@ def test_dense_names_the_row_dropped_not_its_case_folded_sibling(tmp_path):
         vcf_manifest(tmp_path, vcfs, assembly="hg19"), store,
         store_id="s", release_id="r", chain_file=chain,
     )
-    _a, b = _admission(store)
+    _a, b = record_analyses(store)
     assert "se_unusable" in b["dropped"], "fixture: b's lower-case row is dropped for its SE"
     assert "lift_collision" not in b["dropped"]
-    assert sorted(_collision_file(store)[1:]) == sorted(LEDGER)
+    assert sorted(lift_collision_ledger(store)[1:]) == sorted(LEDGER)
 
 
 def test_dense_with_a_plain_reference_counts_and_records_a_collision(tmp_path):
-    """A reference naming no rsids is harvested; the harvest's lift collides on 5501, and
-    the two sources' rows, which the reference does not route, are `lift_collision`."""
+    """A plain list routes hg19 rows by the harvest's lift (#260), which collides on 5501:
+    the two sources' rows are `lift_collision`, and 1501 is stored at 6001."""
     chain = write_collision_chain(tmp_path / "forward.chain")
     reference = tmp_path / "axis.alid.txt"
     reference.write_text(f"{CLEAN}\n", encoding="utf-8")
@@ -177,12 +171,12 @@ def test_dense_with_a_plain_reference_counts_and_records_a_collision(tmp_path):
         store_id="s", release_id="r", chain_file=chain, variant_reference=reference,
     )
     assert _alids(store) == {CLEAN}
-    analyses = _admission(store)
+    analyses = record_analyses(store)
     assert analyses, "fixture: the record names Analyses to judge"
     for analysis in analyses:
-        # The plain reference holds no source key, so 1501 is `off_axis` as ever.
-        assert analysis["dropped"] == {"lift_collision": 2, "off_axis": 1}
-    assert sorted(_collision_file(store)[1:]) == sorted(LEDGER)
+        assert analysis["dropped"] == {"lift_collision": 2}
+        assert (analysis["examined"], analysis["admitted"]) == (3, 1)
+    assert sorted(lift_collision_ledger(store)[1:]) == sorted(LEDGER)
 
 
 def _hybrid_single_pass(tmp_path: Path, **options) -> Path:
@@ -191,6 +185,26 @@ def _hybrid_single_pass(tmp_path: Path, **options) -> Path:
     chain = write_collision_chain(tmp_path / "forward.chain")
     reference = tmp_path / "axis.alid.txt"
     reference.write_text(f"{CLEAN}\n", encoding="utf-8")
+    store = tmp_path / "hybrid.opengwasdb"
+    build_hybrid_from_vcf_manifest(
+        vcf_manifest(tmp_path, _vcfs(tmp_path), assembly="hg19"), store,
+        store_id="h", release_id="v1", chain_file=chain, variant_reference=reference, **options,
+    )
+    return store
+
+
+def _hybrid_fold(tmp_path: Path, **options) -> Path:
+    """A Hybrid build against an artifact that routes hg19 1501 to 6001 and names it,
+    so 501 and 1001 are off-reference: the fold places them, or drops them."""
+    from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
+    from opengwasdb.variants.reference import write_variant_reference
+
+    chain = write_collision_chain(tmp_path / "forward.chain")
+    reference = tmp_path / "axis.variant-ref.tsv.gz"
+    write_variant_reference(
+        reference, [CLEAN], {("1", 1_501, "C", "T"): CLEAN}, {CLEAN: "rs_clean"},
+        reoriented=(),
+    )
     store = tmp_path / "hybrid.opengwasdb"
     build_hybrid_from_vcf_manifest(
         vcf_manifest(tmp_path, _vcfs(tmp_path), assembly="hg19"), store,
@@ -216,7 +230,7 @@ def test_a_fold_interrupted_after_its_axis_is_recorded_resumes_with_the_ledger(
     with monkeypatch.context() as patch:
         patch.setattr(hybrid_build, "_fold_column", _interrupted)
         with pytest.raises(RuntimeError, match="interrupted in the fold"):
-            _hybrid_single_pass(tmp_path, checkpoint=True)
+            _hybrid_fold(tmp_path, checkpoint=True)
     store = tmp_path / "hybrid.opengwasdb"
     checkpoint = checkpoint_dir_for(store)
     assert (checkpoint / "axis.npz").exists(), "fixture: the axis was recorded"
@@ -224,8 +238,7 @@ def test_a_fold_interrupted_after_its_axis_is_recorded_resumes_with_the_ledger(
 
     resume_hybrid_build(checkpoint)
 
-    assert sorted(_collision_file(store)[1:]) == sorted(LEDGER)
-    _check_record(store, stage="fold")
+    _check_record(store, stage="fold", ledger=UNNAMED_LEDGER)
 
 
 def _hybrid_unnamed_reference(tmp_path: Path, vcfs: dict, assembly) -> Path:
@@ -243,13 +256,13 @@ def _hybrid_unnamed_reference(tmp_path: Path, vcfs: dict, assembly) -> Path:
     return store
 
 
-def test_the_ledger_names_what_the_fold_dropped_not_what_the_harvest_found(tmp_path):
-    """SE is 0 at 1001 in both Analyses, so admission drops that row before anything
-    spills: the fold meets only 501, which stores at 1:5501. The harvest found both
-    sources colliding, but the build dropped neither on that account. The control is
-    the same input with a usable SE: it records both, so the fixture does reach the
-    ledger."""
-    usable = _named_row(1_001, "A", "G", "rs_second")
+def test_the_ledger_names_what_the_build_dropped_not_what_the_harvest_found(tmp_path):
+    """SE is 0 at 1001 in both Analyses, so admission drops that row before it is
+    routed. The harvest's lift dropped both sources, so 501 is not stored at 1:5501
+    from its row alone (#260), as the two-pass build does not store it; the ledger names
+    501, the one row the build dropped as a collision, and not 1001. The control is the
+    same input with a usable SE: it records both."""
+    usable = named_row(1_001, "A", "G", "rs_second")
     zero_se = usable.replace("0.2:0.1:0.2", "0.2:0:0.2")
     assert zero_se != usable, "fixture: the SE is edited"
 
@@ -260,13 +273,14 @@ def test_the_ledger_names_what_the_fold_dropped_not_what_the_harvest_found(tmp_p
 
     root = tmp_path / "usable"
     control = _hybrid_unnamed_reference(root, vcfs(root, usable), "hg19")
-    assert sorted(_collision_file(control)[1:]) == sorted(LEDGER), "control: both are recorded"
+    recorded = sorted(lift_collision_ledger(control)[1:])
+    assert recorded == sorted(LEDGER), "control: both are recorded"
     assert COLLIDED not in _alids(control)
 
     root = tmp_path / "zero"
     store = _hybrid_unnamed_reference(root, vcfs(root, zero_se), "hg19")
-    assert COLLIDED in _alids(store), "the fold stored 501, so nothing was dropped"
-    assert not (admission_record_for(store) / "lift_collisions.tsv").exists()
+    assert COLLIDED not in _alids(store), "501 is not stored from its row alone"
+    assert lift_collision_ledger(store)[1:] == [LEDGER[0]]
 
 
 @pytest.mark.parametrize(
@@ -295,18 +309,18 @@ def test_the_fold_names_a_lifted_source_by_its_own_rsid_beside_a_native_one(
     the fold sees only the two hg19 sources, which collide. The ledger gives hg19 501 the
     rsid its own source named it, blank if it named none, in the spelling its source
     wrote: never the native row's rsid or spelling, whatever case either row used."""
-    native_row = _named_row(501, *native.split(":"), native_rsid)
+    native_row = named_row(501, *native.split(":"), native_rsid)
     native_row = native_row.replace("0.2:0.1:0.2", "0.2:0:0.2")
     assert ":0:" in native_row, "fixture: the native row has SE 0"
     vcfs = {
         "a": write_gwas_vcf_with_eaf(tmp_path / "a.vcf", [native_row]),
         "b": write_gwas_vcf_with_eaf(
-            tmp_path / "b.vcf", [_named_row(501, *lifted.split(":"), lifted_rsid), *ROWS[1:]]
+            tmp_path / "b.vcf", [named_row(501, *lifted.split(":"), lifted_rsid), *ROWS[1:]]
         ),
     }
     store = _hybrid_unnamed_reference(tmp_path, vcfs, {"a": "hg38", "b": "hg19"})
     named = "" if lifted_rsid == "." else lifted_rsid
-    assert sorted(_collision_file(store)[1:]) == sorted(
+    assert sorted(lift_collision_ledger(store)[1:]) == sorted(
         [f"{COLLIDED}\t1:501:{lifted}\t{named}", LEDGER[1]]
     )
 
@@ -319,12 +333,12 @@ def test_the_fold_drops_collided_hg19_sources_beside_a_usable_native_row(tmp_pat
     The native row spells a dropped lifted key, so it is `lift_ambiguous`, as Dense and
     the two-pass Hybrid count it; only the two lifted rows are `lift_collision`."""
     vcfs = {
-        "a": write_gwas_vcf_with_eaf(tmp_path / "a.vcf", [_named_row(501, "A", "G", native_rsid)]),
+        "a": write_gwas_vcf_with_eaf(tmp_path / "a.vcf", [named_row(501, "A", "G", native_rsid)]),
         "b": write_gwas_vcf_with_eaf(tmp_path / "b.vcf", ROWS),
     }
     store = _hybrid_unnamed_reference(tmp_path, vcfs, {"a": "hg38", "b": "hg19"})
     assert COLLIDED not in _alids(store)
-    assert sorted(_collision_file(store)[1:]) == sorted(LEDGER)
-    native, lifted = _admission(store)
+    assert sorted(lift_collision_ledger(store)[1:]) == sorted(LEDGER)
+    native, lifted = record_analyses(store)
     assert native["dropped"] == {"lift_ambiguous": 1}
     assert lifted["dropped"] == {"lift_collision": 2}

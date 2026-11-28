@@ -164,6 +164,30 @@ class Unmatched:
     def conflicting(self) -> list[str]:
         return _conflicting_keys(self.keys, (self.z, self.se))
 
+    def split(self, wanted: Collection[str]) -> tuple[Unmatched, Unmatched]:
+        """The rows whose Routing Key is in ``wanted``, and the rest, each in stream
+        order. A key is formed only for a row at a position some wanted key names, so
+        a fold's rows stay unkeyed (#318)."""
+        positions = np.fromiter(
+            {int(key.split(":", 2)[1]) for key in wanted}, dtype=np.int64, count=-1
+        )
+        near = np.flatnonzero(np.isin(np.asarray(self.position, dtype=np.int64), positions))
+        hit = np.zeros(len(self), dtype=bool)
+        hit[[row for row in near.tolist() if self.key_at(row) in wanted]] = True
+        if not hit.any():
+            return Unmatched.none(), self
+        return self._rows(np.flatnonzero(hit)), self._rows(np.flatnonzero(~hit))
+
+    def _rows(self, rows: np.ndarray) -> Unmatched:
+        picked = rows.tolist()
+        return Unmatched(
+            self.z[rows], self.se[rows], self.eaf[rows],
+            chromosome=[self.chromosome[row] for row in picked],
+            position=[self.position[row] for row in picked],
+            ref=[self.ref[row] for row in picked],
+            alt=[self.alt[row] for row in picked],
+        )
+
 
 @dataclass(frozen=True)
 class RoutedColumn:

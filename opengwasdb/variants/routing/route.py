@@ -4,8 +4,11 @@ The authority decides. Under `LiftedUnion` the sources themselves are the
 axis: Pass 1 reads each once, lifts the hg19 group to GRCh38 and names each
 ALID by its first-named rsid. Under `FromReference` a Variant Reference is
 the axis and its source keys the routing; Pass 1 runs only to harvest names
-the reference lacks, and only when it names none. Either harvest compares the
-names a site's spellings carry, by one rule (issue #379).
+the reference lacks, and only when it names none. A reference that names no
+source keys (a plain ALID list, a Store Variant Table) can route only a GRCh38
+row, by identity: when an hg19 source is in the build, Pass 1's lifted union
+routes every site and the reference stays the axis (issue #260). Either harvest
+compares the names a site's spellings carry, by one rule (issue #379).
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from dataclasses import dataclass, replace
 from functools import cached_property
 from pathlib import Path
 
+from opengwasdb.build.liftover import lifted_positions
 from opengwasdb.readers.registry import SourceSpec, open_source
 from opengwasdb.store_reader.identity import (
     is_primary_contig,
@@ -29,6 +33,7 @@ from opengwasdb.variants.routing.keys import (
     SourceKey,
     contig_label,
     note_origin,
+    raw_site_key,
     routing_key,
     source_alid,
 )
@@ -37,6 +42,7 @@ from opengwasdb.variants.routing.lift import (
     LiftDrops,
     UnionPlacement,
     collided_sites,
+    find_lift_collisions,
     place_union,
 )
 from opengwasdb.variants.routing.names import (
@@ -83,7 +89,9 @@ class FromReference:
     exactly as Pass 1's lift re-signs them, so a single-pass build stores what
     the two-pass one does (issue #354). Pass 1 runs only when the reference
     names no rsids, to harvest them; its lift then uses ``chain_file`` and
-    ``failure_threshold``, though it routes nothing.
+    ``failure_threshold``, though it routes nothing. A reference with no source
+    keys and a build with an hg19 source is the exception: Pass 1's lift, with
+    the same chain and threshold, routes every site (issue #260).
     """
 
     reference: VariantReference
@@ -102,6 +110,11 @@ class VariantRouting:
     ``lift_drops`` is each source site dropped because another source locus lifted
     onto its ALID (#325), by both identities, and the routing keys by which Pass 2
     counts their rows as `lift_collision`.
+
+    ``placed_every_site`` says Pass 1 placed every source site, as a two-pass build
+    does: a row the site map does not hold is one the routing dropped (a failed or
+    off-primary lift, a collision, a tuple both assemblies declare) and is counted
+    as such, never placed later by a Hybrid fold (issue #260).
     """
 
     def __init__(
@@ -114,6 +127,7 @@ class VariantRouting:
         stats: Pass1Stats,
         off_primary: frozenset[str] = frozenset(),
         lift_drops: LiftDrops | None = None,
+        placed_every_site: bool = False,
     ) -> None:
         self._site_alid: Mapping[SourceKey, str] | None = site_alid
         self._reoriented = reoriented
@@ -122,6 +136,7 @@ class VariantRouting:
         self.stats = stats
         self.off_primary = off_primary
         self.lift_drops = lift_drops if lift_drops is not None else LiftDrops()
+        self.placed_every_site = placed_every_site
 
     def _sites(self) -> Mapping[SourceKey, str]:
         if self._site_alid is None:
@@ -192,33 +207,76 @@ def route_variants(
     union_pass = _UnionPass(
         sources, n_workers, union if union is not None else UnionOptions(), Pass1Stats(), readers
     )
-    if isinstance(authority, FromReference):
+    if isinstance(authority, FromReference) and not _needs_lift_or_refuses(
+        authority.reference, sources
+    ):
         return _route_by_reference(
             union_pass, authority, on_rsid_conflict, label or HARVEST_LABEL
         )
-    return _route_by_union(union_pass, authority, on_rsid_conflict, label or UNION_LABEL)
+    default = HARVEST_LABEL if isinstance(authority, FromReference) else UNION_LABEL
+    return _route_by_union(union_pass, authority, on_rsid_conflict, label or default)
+
+
+def _needs_lift_or_refuses(reference: VariantReference, sources: Sequence[SourceSpec]) -> bool:
+    """Whether ``reference`` cannot route ``sources`` itself, so Pass 1's lift must;
+    raises ``ValueError`` for a source neither can place.
+
+    A reference with source keys (an extraction artifact) routes every source it was
+    extracted from. One without them routes a row only by its own coordinate, which
+    is an hg38 ALID only for a GRCh38 source: an hg19 source's rows are lifted, by
+    the lift the two-pass build uses (issue #260). A source declared under any other
+    assembly cannot be placed either way, and is refused."""
+    if reference.explicit_source_keys:
+        return False
+    unknown = sorted({s.assembly for s in sources} - {"hg19", "hg38"})
+    if unknown:
+        raise ValueError(
+            f"the Variant Reference names no source keys, so it routes only a GRCh38 "
+            f"source by its own coordinate, and an hg19 source by the lift; the manifest "
+            f"declares {', '.join(map(repr, unknown))}, which neither places"
+        )
+    return any(s.assembly == "hg19" for s in sources)
 
 
 def _route_by_union(
     union_pass: _UnionPass,
-    authority: LiftedUnion,
+    authority: LiftedUnion | FromReference,
     policy: RsidConflictPolicy,
     label: str,
 ) -> VariantRouting:
-    """The sources' own union as the axis: every site lifted and placed, each named
-    by its first rsid. A collision's sources name nothing: they reach no ALID (#325)."""
+    """Every site lifted and placed, each named by its first rsid. A collision's
+    sources name nothing: they reach no ALID (#325).
+
+    The sources' own union is the axis, or, under a `FromReference` whose reference
+    names no source keys, the reference is (issue #260): it decides which ALIDs
+    exist, and a site placed on none of them is off its axis, as an off-panel
+    variant is to a two-pass build. A reference that names its rsids names them."""
     placed, rsid_by_site = _place_union_pass(union_pass, authority)
-    collided = collided_sites(placed.collisions)
-    names = union_names(
-        rsid_by_site.without(placed.dropped, collided),
-        placed.lookup,
-        policy=policy,
-        label=label,
-    )
+    reference = authority.reference if isinstance(authority, FromReference) else None
+    if reference is not None and reference.rsid_by_alid:
+        names = _reference_names(reference, policy)
+    else:
+        names = union_names(
+            rsid_by_site.without(placed.dropped, collided_sites(placed.collisions)),
+            placed.lookup,
+            policy=policy,
+            label=label,
+        )
     return VariantRouting(
-        placed.lookup, placed.reoriented, axis=None, names=names, stats=union_pass.stats,
+        placed.lookup, placed.reoriented,
+        axis=None if reference is None else reference.alids,
+        names=names, stats=union_pass.stats,
         off_primary=frozenset(placed.off_primary),
         lift_drops=LiftDrops.of(placed.collisions, rsid_by_site.lifted),
+        placed_every_site=True,
+    )
+
+
+def _reference_names(reference: VariantReference, policy: RsidConflictPolicy) -> RoutedNames:
+    """The names a reference that names rsids gives, used as given (issue #255)."""
+    warn_reference_left_rows_blank(reference)
+    return RoutedNames(
+        dict(reference.rsid_by_alid), RsidConflicts(policy, None), reference_named=True
     )
 
 
@@ -318,16 +376,100 @@ def _without_sites(reference: VariantReference, sites: set[SourceKey]) -> Varian
 
 
 def _lifted_off_primary_sites(reference: VariantReference) -> set[SourceKey]:
-    """The reference's source sites whose own contig is not that of the off-primary
-    ALID they reach: the ones a lift put there."""
+    """The reference's source sites a lift moved onto the off-primary ALID they reach."""
     off_primary = {a for a in reference.alids if not is_primary_contig(a.split(":", 1)[0])}
     if not off_primary:
         return set()
     return {
         site
         for site, alid in reference.source_lookup.items()
-        if alid in off_primary and contig_label(site[0]) != alid.split(":", 1)[0]
+        if alid in off_primary and _moved_by_a_lift(site, alid)
     }
+
+
+def _without_frozen_collisions(
+    reference: VariantReference, sources: Sequence[SourceSpec], chain_file: str | Path | None
+) -> tuple[VariantReference, LiftCollisions]:
+    """``reference`` less the source keys of every ALID it routes two lifted loci to,
+    and those keys by ALID (#325, #260).
+
+    An artifact extracted before #325 keeps such an ALID with both loci's keys, and
+    routed as given it would store one locus's statistics under the other's rsid. The
+    rule is the lift's (`find_lift_collisions`), held to the lifted keys
+    (`_lifted_keys`). The ALID stays on the axis, which the reference decides; no
+    source key reaches it. A build with no hg19 source lifted nothing, so its keys are
+    not scanned."""
+    assemblies = {source.assembly for source in sources}
+    if not reference.explicit_source_keys or "hg19" not in assemblies:
+        return reference, {}
+    collisions = find_lift_collisions(
+        _lifted_keys(reference.source_lookup, every_source_hg19=assemblies == {"hg19"},
+                     chain_file=chain_file)
+    )
+    if not collisions:
+        return reference, {}
+    sites = collided_sites(collisions)
+    first, first_sites = next(iter(collisions.items()))
+    log.warning(
+        "the Variant Reference routes %d ALID(s) from two or more lifted source loci "
+        "(first: %s, from %s) -- all %d of their source keys are dropped, as a lift "
+        "collision is (#325)",
+        len(collisions), first, ", ".join(map(raw_site_key, first_sites)), len(sites),
+    )
+    return _without_sites(reference, sites), collisions
+
+
+def _lifted_keys(
+    lookup: Mapping[SourceKey, str], *, every_source_hg19: bool, chain_file: str | Path | None
+) -> dict[SourceKey, str]:
+    """The keys of an artifact's ``lookup`` that an hg19 source's lift placed, by ALID.
+
+    With every source hg19, that is every key. In a mixed manifest, a key a lift moved
+    (`_moved_by_a_lift`) was lifted. A key at its ALID's own locus may be a GRCh38
+    key, or an hg19 key the chain leaves where it is: the artifact does not say which
+    assembly spelled it. It counts as lifted where the chain places its coordinate,
+    read as hg19, on its own ALID's locus. Only a key beside a moved key at one ALID can
+    collide, so only those are lifted. No failure threshold applies, since a key the
+    chain places elsewhere, or nowhere, is a GRCh38 key."""
+    if every_source_hg19:
+        return dict(lookup)
+    moved = {site: alid for site, alid in lookup.items() if _moved_by_a_lift(site, alid)}
+    reached = set(moved.values())
+    beside = {
+        site: alid for site, alid in lookup.items() if alid in reached and site not in moved
+    }
+    return moved | _left_in_place(beside, chain_file=chain_file)
+
+
+def _left_in_place(
+    lookup: Mapping[SourceKey, str], *, chain_file: str | Path | None
+) -> dict[SourceKey, str]:
+    """The keys of ``lookup`` whose coordinate, read as hg19, the chain leaves on the
+    locus of the ALID they reach."""
+    sites = list(lookup)
+    landed = lifted_positions([(str(s[0]), int(s[1])) for s in sites], chain_file=chain_file)
+    return {
+        site: lookup[site]
+        for site, place in zip(sites, landed, strict=True)
+        if place is not None and not _moved_by_a_lift(place, lookup[site])
+    }
+
+
+def _moved_by_a_lift(site: tuple[str, int] | SourceKey, alid: str) -> bool:
+    """Whether ``site`` reaches ``alid`` from another ``(contig, position)``: the one
+    rule for whether a reference's source key was lifted, since a GRCh38 key names its
+    ALID's own locus."""
+    contig, position, _rest = alid.split(":", 2)
+    return int(site[1]) != int(position) or contig_label(site[0]) != contig
+
+
+def _merged_collisions(*groups: LiftCollisions) -> LiftCollisions:
+    """The collisions of every group, each ALID's sites once, in sorted order."""
+    sites_by_alid: dict[str, set[SourceKey]] = {}
+    for group in groups:
+        for alid, sites in group.items():
+            sites_by_alid.setdefault(alid, set()).update(sites)
+    return {alid: tuple(sorted(sites)) for alid, sites in sorted(sites_by_alid.items())}
 
 
 def _route_by_reference(
@@ -345,12 +487,12 @@ def _route_by_reference(
     re-oriented (issue #354).
     """
     reference, off_primary = _without_off_primary_lifts(authority.reference)
+    reference, frozen = _without_frozen_collisions(
+        reference, union_pass.sources, authority.chain_file
+    )
     if reference.rsid_by_alid:
-        warn_reference_left_rows_blank(reference)
-        names = RoutedNames(
-            dict(reference.rsid_by_alid), RsidConflicts(policy, None), reference_named=True
-        )
-        lift_drops = LiftDrops()
+        names = _reference_names(reference, policy)
+        lift_drops = LiftDrops.of(frozen)
     else:
         placed, rsid_by_site = _place_union_pass(union_pass, authority)
         # A tuple declared under both assemblies is two loci; naming the lifted
@@ -360,7 +502,7 @@ def _route_by_reference(
         # What the harvest's own lift collided on, less the sources the reference routes
         # itself: those rows are placed, so nothing is dropped of them.
         lift_drops = LiftDrops.of(
-            _unrouted_collisions(placed.collisions, reference),
+            _merged_collisions(_unrouted_collisions(placed.collisions, reference), frozen),
             rsid_by_site.lifted,
         )
         names = harvested_names(

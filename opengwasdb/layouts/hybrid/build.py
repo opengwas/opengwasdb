@@ -334,13 +334,17 @@ def _resolve_column_hybrid(
     for placed, alids in zip(routed.placed, axes, strict=True):
         record_duplicates(gate, placed, alids)
     unmatched = routed.unmatched
+    lifted = row.source_assembly == "hg19"
     if not folds:
         # A two-pass axis is the sources' whole union, so nothing folds an
         # unmatched row onto it later: it is dropped here, and logged.
-        gate.unplaced_unmatched(
-            unmatched, off_primary, lift_collided, lifted=row.source_assembly == "hg19"
-        )
+        gate.unplaced_unmatched(unmatched, off_primary, lift_collided, lifted=lifted)
         unmatched = Unmatched.none()
+    elif lift_collided:
+        # The routing dropped these sources as a lift collision; a fold that met one
+        # without the other would place it (#260).
+        collided, unmatched = unmatched.split(lift_collided)
+        gate.unplaced_unmatched(collided, frozenset(), lift_collided, lifted=lifted)
     return (
         (dense.index, dense.z, dense.se, dense.eaf),
         (overflow.index, overflow.z, overflow.se, overflow.eaf),
@@ -608,6 +612,9 @@ class _SourceAxis:
     #: The sites a lift collision dropped (#325): their keys count their rows, and
     #: the Admission record names each.
     lift_drops: LiftDrops = LiftDrops()
+    #: Whether Pass 2's unmatched rows are folded onto the axis after it: only when
+    #: the routing did not place every source site (`VariantRouting.placed_every_site`).
+    folds: bool = False
 
 
 @dataclass(frozen=True)
@@ -644,6 +651,9 @@ class _PreparedBuild:
     #: The routing keys of the sites a lift placed off the primary assembly (#376).
     off_primary: frozenset[str] = frozenset()
     lift_drops: LiftDrops = LiftDrops()
+    #: Whether the fold places Pass 2's unmatched rows (`_SourceAxis.folds`). A
+    #: build resumed past the fold has none left to place.
+    folds: bool = False
 
 
 @dataclass(frozen=True)
@@ -894,8 +904,11 @@ def _route(
 
     With ``--variant-reference`` the reference replaces Pass 1's union: its
     source keys route, its ALIDs define the Dense axis, and Pass 1 runs only
-    to harvest the names a reference lacks. Without one, Pass 1 reads every
-    source once and lifts hg19 rows. Either way the build routes by the
+    to harvest the names a reference lacks. A reference with no source keys
+    cannot route an hg19 row, so with an hg19 source Pass 1's lifted union
+    routes, as in a two-pass build with the reference as its panel (issue
+    #260). Without one, Pass 1 reads every source once and lifts hg19 rows.
+    Either way the build routes by the
     case-folded key, since a Source Reader keeps the source's allele spelling
     and an ALID is upper-case, and a harvest compares the names a site's
     spellings carry under ``--on-rsid-conflict`` (issue #379).
@@ -905,9 +918,10 @@ def _route(
     if options.variant_reference is not None:
         reference = read_variant_reference(options.variant_reference)
         panel_alids = _resolve_reference_panel(options, reference)
+        # Whether Pass 1 runs is the routing's to say: to harvest names, or to lift
+        # every site when a reference with no source keys meets an hg19 source.
         log.info(
-            "Single-pass build: variant axis loaded from %s (%d panel variants); "
-            "Pass 1 variant discovery bypassed",
+            "Single-pass build: variant axis loaded from %s (%d panel variants)",
             options.variant_reference,
             len(panel_alids),
         )
@@ -970,6 +984,7 @@ def _lift_and_partition(
         table=table,
         off_primary=routing.off_primary,
         lift_drops=routing.lift_drops,
+        folds=not routing.placed_every_site,
     )
 
 
@@ -1706,7 +1721,9 @@ def _finalise_reference_partition(
     Overflow; they are unknown until Pass 2 streams them, so their shared
     indices -- and therefore the panel's mapping onto them -- are only
     computable now. A legacy ``--reference-panel`` build already knows its
-    whole union before Pass 2 and is returned unchanged.
+    whole union before Pass 2 and is returned unchanged, and so is a build whose
+    reference names no source keys and whose hg19 sources Pass 1 lifted (issue
+    #260): its routing placed every source site (`_PreparedBuild.folds`).
 
     With a checkpoint (issue #227) the axis this computes is recorded before
     the fold's first column, and a resumed fold runs under exactly that record
@@ -1718,7 +1735,7 @@ def _finalise_reference_partition(
     attached through the same routing the association uses before the axis -- and
     the recorded rsid map -- is written.
     """
-    if options.variant_reference is None:
+    if not prepared.folds:
         _refuse_off_reference_spills(prepared.spill_dir)
         _record_axis(state, prepared, None)
         return prepared
@@ -2087,7 +2104,7 @@ def _route_studies(
         prepared.maf_policies,
         record,
         (prepared.partition.panel_sorted, prepared.partition.shared_sorted),
-        folds=options.variant_reference is not None,
+        folds=prepared.folds,
         off_primary=prepared.off_primary,
         lift_collided=prepared.lift_drops.keys,
     )
@@ -2099,10 +2116,8 @@ def _route_studies(
         left_out.dense[col], left_out.overflow[col] = dense_left_out, overflow_left_out
         seen |= collided
         log_progress("Pass 2", i + 1, n_analyses, pass2_start, f"last: {id_by_col[col]}", every=25)
-    if not context.folds:
-        # What Pass 2 really dropped; a single-pass build's drops are the fold's, and
-        # are written there from what the fold resolved.
-        record.write_lift_collisions(prepared.lift_drops.among(seen))
+    # What Pass 2 really dropped; a fold adds the drops it resolves itself.
+    record.write_lift_collisions(prepared.lift_drops.among(seen))
     return _RoutedSpills(
         id_by_col=id_by_col,
         pass2_start=pass2_start,
@@ -2606,6 +2621,7 @@ def _prepare_build(
         consistency=consistency,
         off_primary=axis.off_primary,
         lift_drops=axis.lift_drops,
+        folds=axis.folds,
     )
 
 
@@ -2979,13 +2995,13 @@ def build_hybrid_from_vcf_manifest(
 
     The Dense Component axis is exactly ``variant_reference``'s ALIDs (or, when
     both are given, the ``--reference-panel`` subset, which the reference must
-    carry; an inconsistent panel defers to the reference). With a reference,
-    Pass 1 variant discovery is bypassed (single-pass build, issue #186) and
-    the reference's source-coordinate map routes on-reference associations to
-    the Dense Component and off-reference ones to the Ragged Overflow during
-    Pass 2. With only ``reference_panel``, the legacy two-pass build reads every
-    source once and lifts hg19 rows. A reference that names no rsids runs Pass 1's
-    harvest, rekeyed through this build's routing, so its names match the two-pass
+    carry; an inconsistent panel defers to the reference). With a reference, its
+    source-coordinate map routes on-reference associations to the Dense Component
+    and off-reference ones to the Ragged Overflow during Pass 2 (single-pass,
+    #186); with no source keys and an hg19 source, Pass 1's lift routes (#260).
+    With only ``reference_panel``, the two-pass build reads every source once and
+    lifts hg19 rows. A reference that names no rsids runs Pass 1's harvest,
+    rekeyed through this build's routing, so its names match the two-pass
     build's for every variant both axes carry (`RoutedNames.finish`, #255); rows
     are assumed hg19 and lifted inline unless the manifest declares
     ``source_assembly=hg38`` (#85); ``source_reader_capability`` supplies the

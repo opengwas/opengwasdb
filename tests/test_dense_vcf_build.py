@@ -2262,12 +2262,11 @@ class TestVariantReferenceErrors:
         )
         return _make_manifest(tmp_path, [("trait_a", vcf, "Trait A")])
 
-    def test_identity_reference_with_hg19_manifest_warns_and_drops(self, tmp_path, caplog):
-        """An identity panel resolves only hg38 coordinates; an hg19 manifest is
-        accepted (off-reference variants drop as documented), but the assembly
-        mismatch is logged so it cannot pass unremarked."""
-        import logging
-
+    def test_identity_reference_lifts_an_hg19_manifest_with_the_real_chain(self, tmp_path):
+        """A plain list names no source keys, so an hg19 row is lifted, as the two-pass
+        build lifts it, and never stored at its own coordinate (issue #260). The list
+        holds hg19 1:1000000's own coordinate as an ALID, the ticket's case: the row is
+        stored at 1:1064620:C:T, where the bundled chain puts it."""
         from opengwasdb.variants.legacy_table import iter_variant_records
 
         vcf = _make_vcf(
@@ -2279,19 +2278,29 @@ class TestVariantReferenceErrors:
         )
         manifest = _make_manifest(tmp_path, [("trait_hg19", vcf, "Trait hg19")])
         reference = tmp_path / "panel.alids"
-        reference.write_text("1:100000:A:G\n", encoding="utf-8")
+        reference.write_text(
+            f"{HG38_ALID_1}\n1:{HG19_POS_2}:C:T\n{HG38_ALID_2}\n", encoding="utf-8"
+        )
         store = tmp_path / "identity.opengwasdb"
 
-        with caplog.at_level(logging.WARNING):
-            build_dense_from_vcf_manifest(
-                manifest, store, store_id="s", release_id="r", variant_reference=reference
-            )
+        build_dense_from_vcf_manifest(
+            manifest, store, store_id="s", release_id="r", variant_reference=reference
+        )
 
-        assert "carries no source-key mapping" in caplog.text
         assert validate_store(store).ok
         assert {r.alid for r in iter_variant_records(store / "variants.tsv.gz")} == {
-            "1:100000:A:G"
+            HG38_ALID_1, f"1:{HG19_POS_2}:C:T", HG38_ALID_2,
         }
+        with query_store(store) as query:
+            stored = query.lookup([f"1:{HG19_POS_2}:C:T", HG38_ALID_2], ["trait_hg19"])
+            table = query.variants_table()
+            z_by_alid = {
+                table[int(i)]["alid"]: float(z)
+                for i, z in zip(stored.variant_index, stored.z, strict=True)
+                if not np.isnan(z)
+            }
+        assert list(z_by_alid) == [HG38_ALID_2], "stored where it lifts, and only there"
+        assert z_by_alid[HG38_ALID_2] == pytest.approx(-5.0, abs=0.01)
 
     def test_artifact_round_trips_source_keys_and_rsids(self, tmp_path):
         source_lookup = {
