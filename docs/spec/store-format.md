@@ -280,6 +280,39 @@ release is the list of associations kept, so absence states itself and it MAY
 declare any of the four. Validators reject a release outside this rule (ADR
 0064).
 
+### 2b. Release lineage (`provenance.lineage`)
+
+A release written by `opengwasdb splice-release` (ADR 0109; #521, #522) is a new release
+of the same Store. It has a fresh `release_id` and `created_at`, and it records in
+`provenance.lineage` the releases it derives from: a list, oldest first, with one entry
+per splice. The first splice of a release starts the list, and each later splice copies
+it and appends one entry. Root and Dense Component manifests carry the same list. A
+release that was never spliced has no `lineage` key.
+
+| Key of an entry | Meaning |
+|---|---|
+| `source_release_id` | the release this splice read |
+| `source_fingerprint` | that release's content as the splice read it: `algorithm` (`opengwasdb-release-fingerprint-v1`), `sha256` over every file's relative path and size and the content of every `manifest.json`, `analyses.tsv`, `zarr.json` and `index.sqlite`, and `n_files` (ADR 0109 §9) |
+| `increment_release_id` | the Increment whose Analyses it added, or `null` when it only dropped |
+| `added`, `dropped` | `analysis_id` lists; an id in both was replaced |
+| `n_analyses_before`, `n_analyses_after` | Analysis counts of the source and of this release |
+| `source_record` | `null`, or an object of key → value pairs: the facts the source did not record, attested by the registry and accepted by the owner (ADR 0109 §3). Keys: `rsid_conflict_policy`, `source_assembly`, `variant_reference_sha256`, `reference_panel_sha256` (`null` when the build took none), `ld_panel_digest`, `indexed_subsets` (name → `variant_list_path`, `overflow_only`), `attested_by`, `evidence` (the records each value was read from) |
+| `reason` | the operator's free text, e.g. a Release Erratum's reference, or `null` |
+| `at`, `tool`, `opengwasdb_version`, `opengwasdb_git_hash` | when and by what the splice ran |
+
+`lineage` lives in `provenance`, not at the top level. Some writers rewrite a manifest
+through the Store Reader's manifest model, which drops top-level keys it does not know, and
+`provenance` is carried whole (ADR 0109 §9). `analysis_index` and `variant_index` are per
+release (ADR 0002, ADR 0109 §2): no entry records an index, and an Analysis is followed
+across releases by `analysis_id`, and an index is valid only with the `release_id` it came
+from. `lineage` records only how a release was made, so a release carrying it stays at
+0.3.0 (§21.1, *A record of how a release was made*; ADR 0109 §9). The last entry's `source_release_id` and
+`source_fingerprint` together name the release a publication must still find live: the
+`release_id` alone does not, since an in-place post addition keeps it (ADR 0109 §9). The rule
+`manifest.lineage`, added with #521, holds the last entry to the release:
+`n_analyses_after` equals `n_analyses_before − |dropped| + |added|` and the row count of
+`analyses.tsv`, every added id is a row, and no dropped id that was not re-added is.
+
 ## 3. Identity and terminology
 
 An **Analysis** is one statistical analysis of one Trait. An Analysis produces associations between that Trait and variants.
@@ -3643,12 +3676,17 @@ only when it touches `provenance`; a change to a required field is a recorded,
 reviewed edit of the release's `manifest.json`, made as part of the same
 coherent step, and every edited Store is re-validated afterwards.
 
+This rule changes values already in published Stores. It is not the rule for a new
+`provenance` block that records how a release was made (§21.1): that block appears only
+in releases written from then on, edits no existing Store, and moves no `format_version`
+at any version, before or after `1.0.0`.
+
 ### 21.1 What breaks compatibility, and what does not
 
 The distinction is defined by **what a reader that does not know about the change would do**, not by the size of the change:
 
 - **Incompatible** (moves the series) — a reader that does not know about the change would *misinterpret* the store: the encoding of an existing array changes; a required entry is removed, renamed, or restructured; the meaning of an existing field changes while its name and type do not. **Before `1.0.0`, a change confined to a controlled vocabulary is the §21.0 exception**: it is applied by editing existing Stores' metadata in place and does not move the version.
-- **Compatible** (moves the remainder) — a reader that does not know about the change still reads correctly everything it already knew, and the new thing is discoverable through the manifest: a new optional array, index, or sidecar; a new `analyses.tsv` column; a new `provenance` block.
+- **Compatible** (moves the remainder) — a reader that does not know about the change still reads correctly everything it already knew, and the new thing is discoverable through the manifest: a new optional array, index, or sidecar; a new `analyses.tsv` column; a new `provenance` block that a reader interprets. **A `provenance` block that only records how a release was made is compatible and moves nothing** (below).
 
 | change | bump (at `0.x.y`) |
 |---|---|
@@ -3658,6 +3696,7 @@ The distinction is defined by **what a reader that does not know about the chang
 | an indel's ALID spelt reference first, its statistic signed for that allele (0.2.2, issue #381, ADR 0079) | patch |
 | `analyses.tsv`'s `n_missing_se_out_of_range`, and no SE above 65,504 stored (0.2.3, issue #338, ADR 0068) | patch |
 | the Clumps of the 5e-8 tier, with `n_loci_5e8` and `n_unclumped_5e8` (§18.1, ADR 0106, issue #417) | none: derived and rebuildable, below |
+| a `provenance` block that only records how a release was made: `converted_from` (issue #492, ADR 0105) and `lineage` (§2b, ADR 0109) | none: a record of how a release was made, below |
 | a required column removed or renamed (ADR 0034) | **minor** |
 | the encoding of `z`, `se` or `eaf` changes (ADR 0037) | **minor** |
 | the fixed-width ALID index replaced by the variable-length ALID sidecar (0.3.0, issue #467, ADR 0105) | **minor** |
@@ -3690,6 +3729,25 @@ release's top-level entries and the Top-Hit rules only the tier arrays they name
 completion writes a release without them (§18.1), which the Store Release Build
 clumps again. ADR 0106 §9 gives the evidence, and the cost of a 0.3.1 instead
 (`docs/store-format-compatibility.md`).
+
+**A record of how a release was made** is a `provenance` block that no reader needs to
+decode an array or answer a query, and that only says how the release came to be: from
+which release, by which tool, with which recorded deviations. It is a compatible change
+that **does not move `format_version`**. A package that does not know the block reads
+every value it knew, correctly, and carries or ignores the block as opaque `provenance`.
+Its `validate` judges the release as it judges any other, since no rule it has reads the
+block and the closed envelope (§1) judges only top-level entries. The package that writes
+the block may judge it: `converted_from` has its own rule and lowers the rules it names to
+warnings (`validation/rules/release.py:545–552`), so an older package's `validate` can be
+stricter on such a release, never laxer. Its completion treats
+the release as it would without the block. Moving the remainder would buy nothing a reader
+lacks. It would make every older package's `validate` fail the release wherever a
+component is tied to one version: the Clumps' rule, for one, fails a clumped 0.3.1 release. There are two instances: `provenance.converted_from` (issue #492, ADR 0105),
+written on 0.3.0 with no move, and `provenance.lineage` (§2b, ADR 0109 §9). A block that a
+reader must interpret to read the release correctly is not this class, and still moves the
+remainder. This narrows ADR 0038 §1's "a new `provenance` block", as the subset paragraph
+above narrows its "optional array, index, or sidecar" (the orchestrator's ruling on #520,
+28 Nov 2026).
 
 ### 21.2 Reader obligations
 
