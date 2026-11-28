@@ -86,6 +86,8 @@ import numpy as np
 
 from benchmarks._artifact import provenance, write_artifact
 from benchmarks._rss import RssSampler
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.ragged import complete
 from opengwasdb.model.analyses import read_analysis_records
 from opengwasdb.model.regions import COMPLETED_KINDS, REGIONS_FILE
@@ -200,10 +202,8 @@ def run(args: argparse.Namespace) -> None:
     result = complete.complete_ragged_store(
         args.source,
         args.dest,
-        args.ld_dir,
-        ancestry=args.ancestry,
-        n_workers=args.n_workers,
-        overwrite=args.overwrite,
+        PanelSource(args.ld_dir, ancestry=args.ancestry),
+        CompletionOptions(n_workers=args.n_workers, overwrite=args.overwrite),
         impute_analysis_ids=chosen,
     )
     payload = {

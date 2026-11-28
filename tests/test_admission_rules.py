@@ -162,6 +162,19 @@ def test_a_frequency_outside_the_interval_is_absent_and_counted():
     assert tally.made_absent == len(reported)
 
 
+def test_a_collided_keys_rows_are_counted_by_whether_their_analysis_was_lifted():
+    """#325: a lifted Analysis's row of a key a lift collision dropped is
+    `lift_collision`; a GRCh38 one's that spells the key is `lift_ambiguous`. Which it is
+    is never assumed."""
+    keys, collided = ["1:501:A:G", "1:9:C:T"], {"1:501:A:G"}
+    for lifted, reason in ((True, Reason.LIFT_COLLISION), (False, Reason.LIFT_AMBIGUOUS)):
+        gate = counting_gate(AnalysisRules("A1"))
+        gate.unplaced_off_axis(keys, (), collided, lifted=lifted)
+        assert gate.counts.dropped == {reason: 1, Reason.OFF_AXIS: 1}
+    with pytest.raises(ValueError, match="whether their Analysis was lifted"):
+        counting_gate(AnalysisRules("A1")).unplaced_off_axis(keys, (), collided)
+
+
 def test_a_gate_records_what_its_stream_left_out():
     """D7: a frequency made absent is counted and its row kept. #365: a row the
     reader dropped for a malformed identity is examined, dropped and logged."""

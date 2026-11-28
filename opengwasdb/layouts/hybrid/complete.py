@@ -32,8 +32,7 @@ favour of an estimate (issue #99).
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -42,8 +41,12 @@ from typing import Any
 import numpy as np
 
 from opengwasdb import top_hits
-from opengwasdb.completion.ld_panel import ceded_at_end, list_all_blocks
-from opengwasdb.completion.schema import completion_quality_rollup
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.manifest import PANEL_FIELDS, panel_fields
+from opengwasdb.completion.options import DEFAULT_OPTIONS, CompletionOptions
+from opengwasdb.completion.reference_eaf import completed_eaf_scope
+from opengwasdb.completion.schema import CompletionQualityRollup
+from opengwasdb.completion.se_exceptions import corrected_se_exception_record, report_se_exceptions
 from opengwasdb.completion.se_out_of_range import PROVENANCE_KEY as SE_OUT_OF_RANGE_KEY
 from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts, counted
 from opengwasdb.encoding.association_codec import (
@@ -55,6 +58,7 @@ from opengwasdb.encoding.association_codec import (
 )
 from opengwasdb.encoding.planes import write_dense_cells
 from opengwasdb.encoding.sd_units import PhenotypeSd
+from opengwasdb.encoding.se_counts import SeExceptionCounts
 from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.dense.top_hits import build_top_hit_indexes as build_dense_top_hit_indexes
@@ -189,40 +193,28 @@ def _open_observed_hybrid_source(source_path: Path) -> StoreManifest:
 def complete_hybrid_store(
     source_path: str | Path,
     dest_path: str | Path,
-    ld_dir: str | Path,
-    *,
-    ancestry: str = "EUR",
-    min_cor: float = 0.7,
-    thresh: float = 0.9,
-    release_id: str | None = None,
-    n_workers: int = 1,
-    overwrite: bool = False,
+    panel: PanelSource,
+    options: CompletionOptions = DEFAULT_OPTIONS,
 ) -> HybridCompletionResult:
     """Produce a Reference-Completed Hybrid store from an Observed-Only
     Hybrid source (ADR 0026, issue #058)."""
     src = Path(source_path)
     dst = Path(dest_path)
-    ld = Path(ld_dir)
     src_manifest = _open_observed_hybrid_source(src)
-
     # The four phases below run inside the staging context, so a failure in
     # any of them leaves no partial release at `dst` (atomic staging).
-    with OpenGWASDBStore.staging(dst, overwrite=overwrite) as staged:
+    with OpenGWASDBStore.staging(dst, overwrite=options.overwrite) as staged:
         # Phase 1: complete the Dense Component via the dense pipeline.
         dense = _complete_dense_component(
             src,
             staged.path,
-            ld,
-            ancestry=ancestry,
-            min_cor=min_cor,
-            thresh=thresh,
-            release_id=release_id,
-            n_workers=n_workers,
+            panel,
+            options,
         )
         # Phase 2: read the source overflow once, fold panel crossovers into
         # the completed component, and rebuild the shared union axis.
         overflow = _read_source_overflow(src)
-        axis = _remap_shared_axis(dense, overflow, ld, ancestry, n_workers)
+        axis = _remap_shared_axis(dense, overflow, src, options.n_workers)
         # Phase 3: shared variant table/dense_to_shared map, then the
         # overflow CSR rebuilt on the remapped indices.
         analyses = _read_analyses(dense.dir)
@@ -231,7 +223,7 @@ def complete_hybrid_store(
         )
         # Phase 4: manifest, overflow top hits and the shared rollups.
         _finalize_completed_hybrid(
-            staged, src_manifest, release_id,
+            staged, src_manifest, options.release_id,
             _root_analyses(src, analyses, overflow_left_out), axis, overflow, n_overflow,
             overflow_left_out,
         )
@@ -253,13 +245,8 @@ def complete_hybrid_store(
 def _complete_dense_component(
     src: Path,
     staged_path: Path,
-    ld_dir: Path,
-    *,
-    ancestry: str,
-    min_cor: float,
-    thresh: float,
-    release_id: str | None,
-    n_workers: int,
+    panel: PanelSource,
+    options: CompletionOptions,
 ) -> _CompletedDense:
     """Run the dense reference-completion pipeline unchanged on the Dense
     Component, then read back the completed axis and plan it recorded.
@@ -273,13 +260,8 @@ def _complete_dense_component(
     dense_result = complete_dense_store(
         dense_component_path(src),
         dense_dir,
-        ld_dir,
-        ancestry=ancestry,
-        min_cor=min_cor,
-        thresh=thresh,
-        release_id=release_id,
-        n_workers=n_workers,
-        overwrite=True,
+        panel,
+        replace(options, overwrite=True),
     )
     dense = open_store(dense_dir)
     dense_axis = dense.variant_axis(aliases=False)
@@ -358,8 +340,7 @@ def _read_source_overflow(src: Path) -> _SourceOverflow:
 
 
 def _remap_shared_axis(
-    dense: _CompletedDense, overflow: _SourceOverflow, ld_dir: Path, ancestry: str,
-    n_workers: int,
+    dense: _CompletedDense, overflow: _SourceOverflow, src: Path, n_workers: int,
 ) -> _SharedAxis:
     """Fold panel crossovers into the completed Dense Component and rebuild
     the shared union axis (issue #99): an off-panel variant that became
@@ -379,18 +360,8 @@ def _remap_shared_axis(
         else np.empty(0, dtype=bool)
     )
     folded, left_out = _stored_crossovers(overflow, is_crossover)
-    _correct_crossover_quality(dense, overflow, overflow_alids, folded, ld_dir, ancestry)
-    n_reclaimed_imputed = _fold_panel_crossovers(
-        dense.dir,
-        dense.alid_to_row,
-        overflow.offsets,
-        overflow.z,
-        overflow.se,
-        overflow.eaf,
-        overflow_alids,
-        folded,
-        dense_encoding=dense.encoding,
-    )
+    n_reclaimed_imputed = _publish_crossover_totals(dense, overflow, overflow_alids, folded, src)
+    _fold_and_recount(dense, overflow, overflow_alids, folded)
     _count_left_out_crossovers(dense.dir, left_out)
     n_imputed = dense.n_imputed - n_reclaimed_imputed
     if is_crossover.any():
@@ -528,89 +499,131 @@ def _root_analyses(
     )
 
 
-def _correct_crossover_quality(
+def _publish_crossover_totals(
     dense: _CompletedDense, overflow: _SourceOverflow, alids: np.ndarray,
-    crossed: np.ndarray, ld_dir: Path, ancestry: str,
-) -> None:
-    """A real Overflow observation replaces a completion attempt, including its counts.
+    crossed: np.ndarray, src: Path,
+) -> int:
+    """A real Overflow observation replaces a completion attempt: the totals say so.
 
-    The Dense phase did not see the Overflow. Keeping its quality row unchanged
-    describes an imputed or missing cell the completed Hybrid no longer holds
-    (#307's completion.quality_counts rule). The panel is still available here,
-    so correct each owning block rather than guessing from its id later.
+    The Dense phase did not see the Overflow, so the totals it published still count
+    the imputed and missing cells the observation is about to overwrite. This takes
+    each off once, from the one read of the cells' status that precedes the fold, and
+    returns how many were imputed. The totals are the release's, the final mask's:
+    `analyses.tsv`'s imputed total, the manifest's `n_imputed` and
+    `n_missing_imputation_failed`, and `eaf_scope`, derived again from what remains
+    (spec §9). The `completion_quality` rows are left as completion wrote them: they
+    are each block's attempts, and an overwritten cell is one of them (#362; spec §12).
     """
     selected = np.flatnonzero(crossed)
     if not len(selected):
-        return
-    cells = _crossover_cells(dense, overflow, alids[selected], selected)
+        return 0
+    imputed, missing = _crossover_status(dense, overflow, alids[selected], selected)
     store = open_store(dense.dir)
-    with store.index_connection() as db:
-        for ai, block_id, filled, empty in _crossover_quality_deltas(cells, ld_dir, ancestry):
-            db.execute(
-                "UPDATE completion_quality SET n_imputed=n_imputed-?, n_missing=n_missing-? "
-                "WHERE analysis_index=? AND block_id=?",
-                (filled, empty, ai, block_id),
-            )
-        invalid = db.execute(
-            "SELECT COUNT(*) FROM completion_quality WHERE n_imputed<0 OR n_missing<0"
-        ).fetchone()[0]
-        if invalid:
-            raise HybridCompletionError("crossover correction would make quality counts negative")
-        rollup = completion_quality_rollup(db, overflow.n_analyses)
-        db.commit()
-    write_analyses_tsv(dense.dir, [
-        replace(a, completion_n_imputed_total=rollup[int(a.analysis_index)].n_imputed_total)
-        for a in _read_analyses(dense.dir)
-    ])
+    _rewrite_corrected_analyses(dense, src, imputed)
     provenance = dict(store.manifest.provenance)
+    completion = provenance["completion"]
+    n_imputed = int(imputed.sum())
     provenance["completion"] = {
-        **provenance["completion"],
-        "n_imputed": sum(int(r.n_imputed_total) for r in rollup.values()),
-        "n_missing_imputation_failed": sum(int(r.n_missing_total) for r in rollup.values()),
+        **completion,
+        "n_imputed": int(completion["n_imputed"]) - n_imputed,
+        "n_missing_imputation_failed": (
+            int(completion["n_missing_imputation_failed"]) - int(missing.sum())
+        ),
+        # What the crossover overwrote, which a block's quality row still counts as an
+        # attempt (spec §12): `completion.quality_counts` needs it to judge the row.
+        "crossover_overwritten": {
+            "n_imputed": imputed.tolist(), "n_missing": missing.tolist(),
+        },
     }
     StagedRelease(dense.dir).write_manifest(replace(store.manifest, provenance=provenance))
+    return n_imputed
 
 
-def _crossover_cells(
+def _rewrite_corrected_analyses(
+    dense: _CompletedDense, src: Path, reclaimed: np.ndarray
+) -> None:
+    """The Dense Component's `analyses.tsv` with each total less what the crossover
+    reclaimed, and `eaf_scope` derived from it as completion derives it."""
+    source = {int(a.analysis_index): a for a in read_analysis_records(src / "analyses.tsv")}
+    carries_reference = dense.encoding.eaf.reference
+    corrected = []
+    for a in _read_analyses(dense.dir):
+        ai = int(a.analysis_index)
+        total = int(a.completion_n_imputed_total) - int(reclaimed[ai])
+        scope = completed_eaf_scope(
+            source[ai], CompletionQualityRollup("", str(total), ""), carries_reference
+        )
+        corrected.append(replace(a, completion_n_imputed_total=str(total), eaf_scope=scope))
+    write_analyses_tsv(dense.dir, corrected)
+
+
+def _crossover_status(
     dense: _CompletedDense, overflow: _SourceOverflow, alids: np.ndarray, selected: np.ndarray,
-) -> dict[str, list[tuple[int, int, int]]]:
-    """The Dense cells about to be replaced, by ALID and their previous status."""
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per Analysis, how many of the Dense cells about to be replaced are imputed, and how
+    many are missing: the one read of their status."""
     rows = np.asarray([dense.alid_to_row[alid] for alid in alids], dtype=np.int64)
     analyses = np.searchsorted(overflow.offsets[1:], selected, side="right")
     root = open_store(dense.dir).arrays(mode="r")
-    associations = DenseGridReader.open(root, dense.encoding).read(Cells.pairs(rows, analyses))
-    imputed = associations.status == Status.IMPUTED
-    missing = associations.status == Status.MISSING
-    cells: dict[str, list[tuple[int, int, int]]] = defaultdict(list)
-    for alid, ai, filled, empty in zip(alids, analyses, imputed, missing, strict=True):
-        cells[str(alid)].append((int(ai), int(filled), int(empty)))
-    return cells
+    status = DenseGridReader.open(root, dense.encoding).read(Cells.pairs(rows, analyses)).status
+    return (
+        np.bincount(analyses[status == Status.IMPUTED], minlength=overflow.n_analyses),
+        np.bincount(analyses[status == Status.MISSING], minlength=overflow.n_analyses),
+    )
 
 
-def _crossover_quality_deltas(
-    cells: dict[str, list[tuple[int, int, int]]], ld_dir: Path, ancestry: str,
-) -> Iterator[tuple[int, str, int, int]]:
-    """Each block's own attempted crossovers, excluding ceded shared endpoints."""
-    for chromosome in sorted({alid.split(":", 1)[0] for alid in cells}):
-        blocks = list_all_blocks(ld_dir, ancestry, chromosome)
-        ceded = ceded_at_end(blocks)
-        for block in blocks:
-            owned = {alid for alid in block.alids if alid is not None}
-            owned -= ceded.get(block.block_id, frozenset())
-            for ai, (filled, empty) in _owned_crossover_counts(cells, owned).items():
-                yield ai, block.block_id, filled, empty
+def _fold_and_recount(
+    dense: _CompletedDense, overflow: _SourceOverflow, alids: np.ndarray, folded: np.ndarray
+) -> None:
+    """Fold the crossovers in, and bring the `se_exceptions` record to the final cells."""
+    overwritten = _overwritten_se_counts(dense, overflow, alids, folded)
+    fold_counts = _fold_panel_crossovers(
+        dense.dir,
+        dense.alid_to_row,
+        overflow.offsets,
+        overflow.z,
+        overflow.se,
+        overflow.eaf,
+        alids,
+        folded,
+        dense_encoding=dense.encoding,
+    )
+    _publish_crossover_se_exceptions(dense, overwritten, fold_counts)
 
 
-def _owned_crossover_counts(
-    cells: dict[str, list[tuple[int, int, int]]], owned: set[str],
-) -> dict[int, tuple[int, int]]:
-    """Per Analysis, the former imputed and missing attempts a block must remove."""
-    counts: dict[int, tuple[int, int]] = {}
-    for alid in cells.keys() & owned:
-        for ai, filled, empty in cells[alid]:
-            old_filled, old_empty = counts.get(ai, (0, 0))
-            counts[ai] = old_filled + filled, old_empty + empty
+def _overwritten_se_counts(
+    dense: _CompletedDense, overflow: _SourceOverflow, alids: np.ndarray, crossed: np.ndarray,
+) -> SeExceptionCounts | None:
+    """The SE codes of the Dense cells the fold is about to replace, counted as the
+    Dense pass counted them; read before the fold writes. None for a plane with no
+    residual SE, which keeps no exception record."""
+    selected = np.flatnonzero(crossed)
+    if not dense.encoding.se.is_residual or not len(selected):
+        return None
+    rows = np.asarray([dense.alid_to_row[alid] for alid in alids[selected]], dtype=np.int64)
+    analyses = np.searchsorted(overflow.offsets[1:], selected, side="right")
+    root = open_store(dense.dir).arrays(mode="r")
+    counts = SeExceptionCounts.zeros(overflow.n_analyses)
+    counts.add(root["se"].vindex[rows, analyses], analyses, root["imputed"].vindex[rows, analyses])
     return counts
+
+
+def _publish_crossover_se_exceptions(
+    dense: _CompletedDense, overwritten: SeExceptionCounts | None,
+    folded: SeExceptionCounts | None,
+) -> None:
+    """The Dense Component's `se_exceptions` record counts the release's final cells:
+    the Dense pass's less the cells the fold overwrote, plus the fold's own (#390),
+    as `_publish_crossover_totals` does for the imputed totals (#362)."""
+    if overwritten is None or folded is None:
+        return
+    store = open_store(dense.dir)
+    provenance = dict(store.manifest.provenance)
+    completion = provenance["completion"]
+    record = corrected_se_exception_record(completion["se_exceptions"], overwritten, folded)
+    report_se_exceptions(record, where="complete-hybrid")
+    provenance["completion"] = {**completion, "se_exceptions": record}
+    StagedRelease(dense.dir).write_manifest(replace(store.manifest, provenance=provenance))
 
 
 # ── Phase 3: shared tables + overflow rebuild ───────────────────────────────
@@ -810,7 +823,7 @@ def _fold_panel_crossovers(
     overflow_alids: np.ndarray,
     is_crossover: np.ndarray,
     dense_encoding: StoreEncoding,
-) -> int:
+) -> SeExceptionCounts | None:
     """Write every crossover association's real observed value into the
     completed Dense Component at ``(dense_row, analysis)``, marked
     ``imputed=0``, in place of whatever dense completion computed there.
@@ -818,13 +831,12 @@ def _fold_panel_crossovers(
     ``is_crossover`` is a boolean mask over the flat source-overflow
     association array (same order/length as ``overflow_alids``/``src_z``/
     ``src_se``/``src_eaf``); ``offsets`` partitions that flat array by analysis, exactly
-    as the sequence's own ``offsets`` array does. Returns how many of the overwritten
-    cells were previously marked imputed, so the caller can correct the
-    reported imputed count -- see the module docstring (issue #99).
+    as the sequence's own ``offsets`` array does. The totals of what it overwrites are
+    `_publish_crossover_totals`', read before this writes -- see the module docstring
+    (issue #99). Returns the SEs it wrote, per Analysis, for a residual SE (#390).
     """
     if not is_crossover.any():
-        return 0
-
+        return None
     n_analyses = len(offsets) - 1
     assoc_ai = np.repeat(np.arange(n_analyses), np.diff(offsets))
     crossover_idx = np.flatnonzero(is_crossover)
@@ -840,7 +852,6 @@ def _fold_panel_crossovers(
     eaf_vals = src_eaf[crossover_idx].astype(np.float32)
 
     root = open_group_for_write(dense_dir / "data.zarr", "a")
-    n_reclaimed = int(np.asarray(root["imputed"].vindex[row_idx, col_idx]).sum())
     # One encode under the Dense Component's own plan, and every side table
     # rewritten with its plane. The crossed-over cell's EAF moves with its z/se
     # (ADR 0036): the fold writes one real observation, not two. It is coded
@@ -856,10 +867,23 @@ def _fold_panel_crossovers(
         ),
         Placement.pairs(row_idx, col_idx, int(root["z"].shape[1])),
         where="complete-hybrid, a crossover fold",
+        # Observations decoded from the Ragged source: exact under this plan too (#390).
+        carried=np.ones(len(row_idx), dtype=bool),
     )
     _refuse_unjudged_crossovers(encoded.storable.se_out_of_range)
     write_dense_cells(root, dense_encoding, row_idx, col_idx, encoded)
-    return n_reclaimed
+    return _fold_se_counts(encoded.se, col_idx, n_analyses, dense_encoding)
+
+
+def _fold_se_counts(
+    codes: np.ndarray, analyses: np.ndarray, n_analyses: int, encoding: StoreEncoding
+) -> SeExceptionCounts | None:
+    """The SEs the fold wrote, per Analysis, as observed cells; None without a residual SE."""
+    if not encoding.se.is_residual:
+        return None
+    counts = SeExceptionCounts.zeros(n_analyses)
+    counts.add(codes, analyses, np.zeros(len(analyses), dtype=np.uint8))
+    return counts
 
 
 def _refuse_unjudged_crossovers(left_out: np.ndarray) -> None:
@@ -882,7 +906,7 @@ def _read_analyses(dense_dir: Path) -> list[Analysis]:
 #: cannot be written without. `ld_panel_id` and `ancestry` are the panel
 #: identity that `eaf_reference` made load-bearing (issue #116); `method` says
 #: how the cells were filled.
-_REQUIRED_DENSE_COMPLETION_KEYS = ("method", "ld_panel_id", "ancestry")
+_REQUIRED_DENSE_COMPLETION_KEYS = ("method", *PANEL_FIELDS, "ancestry")
 
 
 def _dense_completion_provenance(staged_path: Path) -> Mapping[str, Any]:
@@ -1011,13 +1035,14 @@ def _completed_hybrid_provenance(
             },
         ),
         "completion": {
+            **src_manifest.provenance.get("completion", {}),
             # The panel this release was completed against, at the top
             # level and not only inside the Dense Component: "one panel per
             # completed store" is load-bearing once `eaf_reference` holds
             # that panel's frequencies, so it is recorded where a reader of
             # the Hybrid store looks (issue #116).
             "method": dense_completion["method"],
-            "ld_panel_id": dense_completion["ld_panel_id"],
+            **panel_fields(dense_completion),
             "ancestry": dense_completion["ancestry"],
             "component_completed": "dense",
             "overflow_completion_state": "observed_only",

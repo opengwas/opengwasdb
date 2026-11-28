@@ -156,7 +156,7 @@ def test_a_failing_query_raises_rather_than_yield_a_short_stream(tmp_path: Path)
     with patch("opengwasdb.readers.gwas_vcf._format_tags", return_value={"ES", "SE", "XX"}):
         with patch(
             "opengwasdb.readers.gwas_vcf._record_query_format",
-            return_value="%CHROM\t%POS\t%ID\t%REF\t%ALT\t[%XX]\t.\t.\t.\n",
+            return_value="%CHROM\t%POS\t%ID\t%REF\t%ALT\t[%XX]\t.\t.\t.\t.\n",
         ):
             with pytest.raises(OSError, match="bcftools record query failed"):
                 list(reader.stream_associations())
@@ -322,3 +322,40 @@ def test_oriented_alid_is_orient_to_canonicals_answer() -> None:
     assert oriented_alid("1", 100, "G", "GGGGCC", other_is_reference=True) == (
         "1:100:GGGGCC:G", True
     )
+
+
+# ── LP, the p-value the effect-consistency check compares (#510) ─────────────
+
+_ES_SE_LP = (
+    '##FORMAT=<ID=ES,Number=A,Type=Float,Description="Effect size relative to ALT">\n'
+    '##FORMAT=<ID=SE,Number=A,Type=Float,Description="Standard error of effect size">\n'
+    '##FORMAT=<ID=LP,Number=A,Type=Float,Description="-log10 p-value for effect estimate">\n'
+)
+
+
+def test_the_metric_blocks_carry_each_record_s_p_as_ten_to_the_minus_lp(tmp_path: Path) -> None:
+    vcf = tmp_path / "lp.vcf"
+    _write_vcf(
+        vcf,
+        "1\t100\t.\tA\tG\t.\tPASS\t.\tES:SE:LP\t0.5:0.1:5.5\n"
+        "1\t200\t.\tA\tG\t.\tPASS\t.\tES:SE:LP\t0.1:0.1:.\n"
+        "1\t300\t.\tA\tG\t.\tPASS\t.\tES:SE:LP\t0.1:0.1:0.30103\n",
+        formats=_ES_SE_LP,
+    )
+    [chunk] = GwasVcfReader(vcf).stream_metric_chunks()
+    assert chunk.p_value[0] == pytest.approx(10**-5.5)
+    assert math.isnan(chunk.p_value[1])
+    assert chunk.p_value[2] == pytest.approx(0.5, rel=1e-5)
+
+
+def test_a_vcf_without_lp_gives_no_p_and_the_associations_read_none(tmp_path: Path) -> None:
+    """No LP declared: every block's p is missing (`no_source_p_value`), and the
+    association path, which never needs a p, does not query LP even where declared."""
+    vcf = tmp_path / "es_se.vcf"
+    _write_vcf(vcf, "1\t100\t.\tA\tG\t.\tPASS\t.\tES:SE:EZ\t0.5:0.1:5\n")
+    [chunk] = GwasVcfReader(vcf).stream_metric_chunks()
+    assert math.isnan(chunk.p_value[0])
+    with_lp = tmp_path / "lp.vcf"
+    _write_vcf(with_lp, "1\t100\t.\tA\tG\t.\tPASS\t.\tES:SE:LP\t0.5:0.1:5.5\n", formats=_ES_SE_LP)
+    [row] = list(_record_rows(with_lp))
+    assert row.p_value is None

@@ -29,10 +29,16 @@ from opengwasdb.admission.duplicates import record_duplicates
 from opengwasdb.build.eaf_orientation import (
     DEFAULT_SAMPLE_SITES,
     EafOrientationReport,
-    apply_orientation_evidence,
     sample_column_rows,
     site_hashes,
     verify_eaf_orientation,
+)
+from opengwasdb.build.effect_consistency import (
+    ConsistencySource,
+    EffectConsistencyReport,
+    apply_build_evidence,
+    declared_p_value_tests,
+    verify_effect_consistency,
 )
 from opengwasdb.build.liftover import BUILTIN_CHAIN_LABEL, LiftoverFailureError
 from opengwasdb.build.ordered_pool import fork_each, ordered_map
@@ -99,10 +105,17 @@ from opengwasdb.variants.routing import (
     LiftedUnion,
     RouteTable,
     VariantRouting,
+    require_observed_provenance,
     route_variants,
 )
 from opengwasdb.variants.routing.keys import routing_key
-from opengwasdb.variants.routing.lift import lifted_off_primary
+from opengwasdb.variants.routing.lift import (
+    NO_LIFTED_AWAY,
+    LiftDrops,
+    LiftedAway,
+    LiftedAwayReason,
+    lifted_away,
+)
 
 log = logging.getLogger(__name__)
 
@@ -212,6 +225,7 @@ def build_dense_from_vcf_manifest(
     manifest_rows, rules = _manifest_and_rules(
         manifest_path, source_reader_capability, source_assembly, column_map
     )
+    consistency = _verify_effect_consistency(manifest_path, manifest_rows, rules, n_workers)
 
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
@@ -228,8 +242,8 @@ def build_dense_from_vcf_manifest(
         )
         # Phase 8: top-hit indexes, manifest and analyses.tsv metadata.
         _finalize_store(
-            staged, prepared, encoded, eaf_report, store_id, release_id, chain_file,
-            chunk_shape, dtype, allow_unverified_eaf, n_workers, coverage,
+            staged, prepared, encoded, (eaf_report, consistency), store_id, release_id,
+            chain_file, chunk_shape, dtype, allow_unverified_eaf, n_workers, coverage,
         )
         log.info(
             "Build complete: %d variants × %d analyses",
@@ -307,10 +321,14 @@ class _PreparedBuild:
     table: RouteTable
     #: Each Analysis's declared INFO and MAF filters, by Analysis id (D2).
     rules: Mapping[str, AnalysisRules] = field(default_factory=dict)
-    #: The routing keys of the sites a lift placed off the primary assembly (#376).
-    off_primary: frozenset[str] = frozenset()
+    #: The routing keys of the sites a lift placed where no Store row can be, each with
+    #: the Admission reason its rows are counted under (#376, #410).
+    lifted_away: LiftedAway = NO_LIFTED_AWAY
+    #: The sites a lift collision dropped (#325): their keys count their rows, and
+    #: the Admission record names each.
+    lift_drops: LiftDrops = LiftDrops()
     #: The chain a single-pass build lifts its hg19 Analyses' unmatched rows by, to
-    #: tell a lift's off-primary drops from `off_axis` ones; None for a two-pass
+    #: tell a lift's drops (`lifted_away`) from `off_axis` ones; None for a two-pass
     #: build, whose union has lifted every site already (#376).
     unmatched_lift: UnmatchedLift | None = None
     #: The ``--variant-reference`` a single-pass build was given, or None for
@@ -362,11 +380,15 @@ def _write_axis(
     origin = routing.source_alids()
     source_alids = [origin.get(alid) for alid in axis.alids]
     del origin
+    # A row no source observed has no source coordinate (#261).
+    require_observed_provenance(
+        dict(zip(axis.alids, source_alids, strict=True)), routing.supplied,
+        where="build-dense-vcf",
+    )
     write_variant_axis(staged.path, canonical_variants, rsid_by_alid, source_alids)
 
 
 def _routing_authority(
-    manifest_rows: Sequence[ManifestRow],
     chain_file: str | Path | None,
     liftover_failure_threshold: float,
     variant_reference: str | Path | None,
@@ -375,43 +397,26 @@ def _routing_authority(
     if variant_reference is None:
         return LiftedUnion(chain_file, liftover_failure_threshold)
     return FromReference(
-        _load_variant_reference(variant_reference, manifest_rows),
+        _load_variant_reference(variant_reference),
         chain_file,
         liftover_failure_threshold,
     )
 
 
-def _load_variant_reference(
-    variant_reference: str | Path, manifest_rows: Sequence[ManifestRow]
-) -> VariantReference:
-    """Read the reference and note when it cannot resolve the manifest's assembly.
+def _load_variant_reference(variant_reference: str | Path) -> VariantReference:
+    """Read the reference that is this build's axis.
 
     An identity reference (a plain ALID list or a store ``variants.tsv.gz``)
-    carries no source-key mapping, so it resolves only rows already on hg38.
-    The reference is the axis authority and no liftover runs in Pass 2, so a
-    manifest declaring hg19 against one keeps only coordinates that happen to
-    coincide; that is the documented off-reference behaviour, but it is worth
-    saying so rather than letting the shortfall pass unremarked.
+    carries no source-key mapping, so it routes only a GRCh38 row; with an hg19
+    source in the manifest the routing lifts every site as Pass 1 does and the
+    reference stays the axis (issue #260, `route_variants`).
     """
     reference = read_variant_reference(variant_reference)
     log.info(
-        "Single-pass build: variant axis loaded from %s (%d variants); "
-        "Pass 1 variant union and liftover bypassed",
+        "Single-pass build: variant axis loaded from %s (%d variants)",
         variant_reference,
         len(reference.alids),
     )
-    if not reference.explicit_source_keys:
-        non_hg38 = sorted(
-            {row.source_assembly for row in manifest_rows if row.source_assembly != "hg38"}
-        )
-        if non_hg38:
-            log.warning(
-                "Variant reference %s carries no source-key mapping and resolves only hg38 "
-                "coordinates, but the manifest declares %s; variants whose source coordinate "
-                "differs from the reference will be dropped",
-                variant_reference,
-                ", ".join(non_hg38),
-            )
     return reference
 
 
@@ -429,14 +434,13 @@ def _prepare_axis(
 
     hg19-declared rows are lifted to GRCh38 once (issue #85), or a precomputed
     ``variant_reference`` supplies the axis directly and Pass 1 only harvests
-    the names it lacks (single-pass build, issues #185, #255). Either way the
+    names, filling every variant the reference leaves unnamed (single-pass
+    build, issues #185, #255, #258). Either way the
     provenance-carrying variant axis is written and checked against the names
     it was written from, and the route table is built -- consuming the
     routing's site map before any worker forks (issue 043).
     """
-    authority = _routing_authority(
-        manifest_rows, chain_file, liftover_failure_threshold, variant_reference
-    )
+    authority = _routing_authority(chain_file, liftover_failure_threshold, variant_reference)
     routing = route_variants(
         [row.source for row in manifest_rows], authority, n_workers=n_workers
     )
@@ -445,8 +449,8 @@ def _prepare_axis(
         # nothing else names a variant; the harvest it held is freed here.
         routing.names = routing.names.finish()
         log.info(
-            "Single-pass build: reference names no rsids; Pass 1 harvest resolved %d for "
-            "the variant axis",
+            "Single-pass build: Pass 1 harvest resolved %d rsid(s) for the variant axis, "
+            "the reference's own names winning",
             len(routing.names.rsid_by_alid),
         )
     axis = _axis_metadata(routing.alids, manifest_rows)
@@ -462,14 +466,16 @@ def _prepare_axis(
         variant_reference=str(variant_reference) if variant_reference is not None else None,
         column_map=column_map_provenance(manifest_rows),
         rules=rules,
-        off_primary=routing.off_primary,
+        lifted_away=routing.lifted_away,
+        lift_drops=routing.lift_drops,
+        # A routing that placed every site knows where its lifts landed already.
         unmatched_lift=(
-            UnmatchedLift(
+            None
+            if routing.placed_every_site
+            else UnmatchedLift(
                 chain_file,
                 tuple(row.source for row in manifest_rows if row.source_assembly == "hg38"),
             )
-            if variant_reference is not None
-            else None
         ),
     )
 
@@ -484,15 +490,17 @@ class _Pass2Context:
     record: AdmissionRecord
     alids: Sequence[str]
     rules: Mapping[str, AnalysisRules]
-    off_primary: frozenset[str] = frozenset()
+    lifted_away: LiftedAway = NO_LIFTED_AWAY
     unmatched_lift: UnmatchedLift | None = None
+    lift_collided: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
 class UnmatchedLift:
     """How a single-pass build tells a lift's drops from `off_axis` ones: its hg19
     Analyses' unmatched rows are lifted by ``chain_file``, and those the chain
-    places off the primary assembly are counted as `lift_off_primary` (#376).
+    places where no Store row can be are counted under the reason `split_lifted`
+    gives (#376, #410).
     ``grch38_sources`` are the Analyses already on GRCh38, whose declaring a key
     makes it two loci that no row of is a lift's drop. ``checked`` is the keys a
     process has already looked up in them, and whether one declares each, so a
@@ -523,44 +531,54 @@ def _declared_by_grch38(keys: Collection[str], lift: UnmatchedLift) -> set[str]:
     return {key for key in keys if lift.checked[key]}
 
 
-def _unmatched_off_primary(
+def _unmatched_lifted_away(
     keys: Sequence[str], row: ManifestRow, context: _Pass2Context
-) -> frozenset[str]:
-    """The routing keys among ``keys`` that this Analysis's lift placed off the
-    primary assembly, which are dropped as `lift_off_primary`.
+) -> LiftedAway:
+    """The routing keys among ``keys`` that this Analysis's lift placed where no Store
+    row can be, each with the reason its rows are dropped under (`split_lifted`).
 
     Only an hg19 Analysis's rows were lifted. A two-pass build's union has placed
     every site and settled the keys both assemblies declare; a single-pass build's
     candidates are the union's too (a stale reference's) and the unmatched rows the
-    chain lifts onto the alt contig, less any key a GRCh38 Analysis declares, as
-    the Hybrid fold leaves them (two loci, `off_axis`)."""
+    chain lifts onto an alt contig or where GRCh38 has no sequence, less any key a
+    GRCh38 Analysis declares, as the Hybrid fold leaves them (two loci, `off_axis`)."""
     if row.source_assembly != "hg19":
-        return frozenset()
+        return NO_LIFTED_AWAY
     lift = context.unmatched_lift
     if lift is None:
-        return context.off_primary
+        return context.lifted_away
     if not keys:
-        return frozenset()
+        return NO_LIFTED_AWAY
+    candidates = _known_among(keys, context.lifted_away) | _lift_unmatched(keys, lift)
+    declared = _declared_by_grch38(candidates.keys(), lift)
+    return {key: reason for key, reason in candidates.items() if key not in declared}
+
+
+def _known_among(keys: Sequence[str], known: LiftedAway) -> dict[str, LiftedAwayReason]:
+    """The ``keys`` the routing already knows a lift placed where no row can be."""
+    return {key: known[key] for key in keys if key in known}
+
+
+def _lift_unmatched(keys: Sequence[str], lift: UnmatchedLift) -> dict[str, LiftedAwayReason]:
+    """The unmatched routing ``keys`` the chain places where no Store row can be."""
     sites = [(c, int(p), r, a) for c, p, r, a in (key.split(":") for key in keys)]
-    candidates = (context.off_primary & set(keys)) | lifted_off_primary(
-        sites, chain_file=lift.chain_file
-    )
-    return frozenset(candidates - _declared_by_grch38(candidates, lift))
+    return lifted_away(sites, chain_file=lift.chain_file)
 
 
 def _route_and_spill(
     context: _Pass2Context, task: tuple[int, ManifestRow]
-) -> tuple[int, int]:
+) -> tuple[int, int, frozenset[str]]:
     """Route one Analysis's column through the shared table and spill it.
 
-    Returns the column index and how many of its associations `storable` left
-    out (issue #338): the compact result stays on disk, never in a pipe. An
+    Returns the column index, how many of its associations `storable` left
+    out (issue #338) and the keys of its rows dropped as a lift collision
+    (#325, a handful at most): the compact result stays on disk, never in a pipe. An
     earlier design returned each column over IPC, and at genome-wide scale
     (~9.85M rows per file, thousands of files) that pipe traffic deadlocked the
     pool.
     """
     col_idx, row = task
-    rules = context.rules[row.trait_id]
+    rules = context.rules[row.trait_id].judging_positions_on(row.source_assembly)
     reader = open_source(
         row.source, imputation_score_declaration=rules.info.imputation_score_declaration
     )
@@ -572,9 +590,13 @@ def _route_and_spill(
         gate.streamed(tally)
         placed = routed.placed[0]
         record_duplicates(gate, placed, context.alids)
-        gate.unplaced_off_axis(
-            routed.unmatched.keys, _unmatched_off_primary(routed.unmatched.keys, row, context)
+        gate.unplaced_unmatched(
+            routed.unmatched,
+            _unmatched_lifted_away(routed.unmatched.keys, row, context),
+            context.lift_collided,
+            lifted=row.source_assembly == "hg19",
         )
+        collided = gate.lift_collided_rows
         where = f"build-dense-vcf, Analysis {row.trait_id}"
         kept = storable(
             CellValues(placed.z, placed.se, placed.eaf), 0, 1, where=where,
@@ -582,7 +604,7 @@ def _route_and_spill(
         )
         log_se_out_of_range(kept.se_out_of_range, where=where)
         _spill_stored(context.spill_dir, col_idx, placed.index, kept)
-    return col_idx, int(kept.se_out_of_range.sum())
+    return col_idx, int(kept.se_out_of_range.sum()), collided
 
 
 def _spill_stored(spill_dir: Path, col_idx: int, rows: np.ndarray, kept: Storable) -> None:
@@ -633,12 +655,14 @@ def _spill_columns(
     )
     context = _Pass2Context(
         prepared.table, spill_dir, record, prepared.axis.alids, prepared.rules,
-        prepared.off_primary, prepared.unmatched_lift,
+        prepared.lifted_away, prepared.unmatched_lift, prepared.lift_drops.keys,
     )
     left_out = np.zeros(len(prepared.axis.analyses), dtype=np.int64)
     columns = fork_each(_route_and_spill, context, tasks, n_workers)
-    for i, (col_idx, n_left_out) in enumerate(columns):
+    seen: set[str] = set()
+    for i, (col_idx, n_left_out, collided) in enumerate(columns):
         left_out[col_idx] = n_left_out
+        seen |= collided
         log_progress(
             "Pass 2",
             i + 1,
@@ -647,8 +671,34 @@ def _spill_columns(
             f"last: {id_by_col[col_idx]}",
             every=25,
         )
+    # Named by what Pass 2 really dropped, not by what the harvest found to collide.
+    record.write_lift_collisions(prepared.lift_drops.among(seen))
     record.finish()
     return left_out
+
+
+def _verify_effect_consistency(
+    manifest_path: str | Path,
+    manifest_rows: Sequence[ManifestRow],
+    rules: Mapping[str, AnalysisRules],
+    n_workers: int,
+) -> EffectConsistencyReport:
+    """Check each Analysis's stored z against its source's own p-value (#510, ADR 0069).
+
+    The first phase that reads a source: each one's first rows, through the
+    resolver's projection and the Analysis's declared INFO and MAF rules, before
+    Pass 1 or the axis, so a build that refuses does so before its hours of
+    routing. A GWAS-VCF's p-value is its `LP`; one whose header declares none is
+    stamped `skipped: no_source_p_value`, unread.
+    """
+    declared = declared_p_value_tests(manifest_path)
+    return verify_effect_consistency(
+        [
+            ConsistencySource(row.source, rules[row.trait_id], declared.get(row.trait_id))
+            for row in manifest_rows
+        ],
+        n_workers=n_workers,
+    )
 
 
 def _survey_and_verify_eaf(
@@ -798,7 +848,7 @@ def _finalize_store(
     staged: StagedRelease,
     prepared: _PreparedBuild,
     encoded: _EncodedBands,
-    eaf_report: EafOrientationReport,
+    reports: tuple[EafOrientationReport, EffectConsistencyReport],
     store_id: str,
     release_id: str,
     chain_file: str | Path | None,
@@ -814,8 +864,9 @@ def _finalize_store(
     top-hit indexes are written from the band-write's stored-value harvest
     (issue 046); analyses.tsv is written last, with each Analysis's
     ``eaf_scope`` stamped from what was actually stored (ADR 0036) and the
-    orientation evidence applied (issue #115).
+    orientation and effect-consistency evidence applied (issue #115, #510).
     """
+    eaf_report, consistency = reports
     axis = prepared.axis
     _write_manifest(
         staged,
@@ -836,8 +887,8 @@ def _finalize_store(
         staged.path, encoded.hits.rows, encoded.hits.cols, encoded.hits.z, encoded.hits.se,
         encoded.encoding, n_workers=n_workers,
     )
-    analyses = apply_orientation_evidence(
-        apply_eaf_scope(axis.analyses, encoded.column_has_eaf), eaf_report
+    analyses = apply_build_evidence(
+        apply_eaf_scope(axis.analyses, encoded.column_has_eaf), eaf_report, consistency
     )
     write_analyses_tsv(
         staged.path,

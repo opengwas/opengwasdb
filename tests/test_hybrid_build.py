@@ -31,7 +31,11 @@ from liftover_fixtures import (
     strand_vcf_rows,
     write_two_strand_chain,
 )
-from store_assertions import assert_same_band_arrays, assert_same_top_hits
+from store_assertions import (
+    assert_hybrid_stores_match,
+    assert_same_band_arrays,
+    assert_same_top_hits,
+)
 from unknown_key_oracle import encode_keys
 
 from opengwasdb.admission import admission_record_for
@@ -58,6 +62,7 @@ from opengwasdb.store_reader.layout import ArrayRole
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.top_hits import threshold_key
 from opengwasdb.validation import validate_store
+from opengwasdb.variants.reference import read_variant_reference
 
 HG19_POS_1 = 100_000
 HG19_POS_2 = 1_000_000
@@ -1215,43 +1220,6 @@ def _dense_records(store: Path) -> list:
         axis.close()
 
 
-def _assert_hybrid_stores_match(reference: Path, candidate: Path) -> None:
-    """Every stored data artifact matches: variant tables, dense matrix,
-    overflow CSR, top hits and analyses.tsv (manifest timestamps excluded)."""
-    assert validate_store(candidate).ok, validate_store(candidate).errors
-
-    for name in ("variants.tsv.gz",):
-        with gzip.open(reference / name, "rt", encoding="utf-8") as handle:
-            left = handle.read()
-        with gzip.open(candidate / name, "rt", encoding="utf-8") as handle:
-            right = handle.read()
-        assert left == right, name
-
-    np.testing.assert_array_equal(
-        np.load(reference / "dense" / "dense_to_shared.npy"),
-        np.load(candidate / "dense" / "dense_to_shared.npy"),
-    )
-    ref_store = open_store(reference)
-    cand_store = open_store(candidate)
-    ref_dense = ref_store.dense_component().arrays(mode="r")
-    cand_dense = cand_store.dense_component().arrays(mode="r")
-    for name in ("z", "se"):
-        np.testing.assert_array_equal(ref_dense[name][:], cand_dense[name][:])
-    ref_ragged = ref_store.arrays(mode="r")["ragged"]
-    cand_ragged = cand_store.arrays(mode="r")["ragged"]
-    for name in ("offsets", "variant_index", "z", "se"):
-        np.testing.assert_array_equal(ref_ragged[name][:], cand_ragged[name][:])
-
-    with query_store(reference) as left_q, query_store(candidate) as right_q:
-        for threshold in (5e-4, 5e-6, 5e-8):
-            left_hits = left_q.top_hits(threshold=threshold)
-            right_hits = right_q.top_hits(threshold=threshold)
-            for field in ("variant_index", "analysis_index", "z", "se"):
-                np.testing.assert_array_equal(left_hits[field], right_hits[field])
-
-    assert (reference / "analyses.tsv").read_text() == (candidate / "analyses.tsv").read_text()
-
-
 def _assert_hybrid_build_fails_naming_keys(
     manifest: Path, store: Path, reference: Path, *keys: str
 ) -> None:
@@ -1446,7 +1414,7 @@ class TestVariantReference:
         assert result.n_panel == 2
         assert result.n_off_panel == 1
         assert result.n_overflow == 1
-        _assert_hybrid_stores_match(two_pass, single_pass)
+        assert_hybrid_stores_match(two_pass, single_pass)
 
     def test_panel_only_reference_lifts_off_reference_during_pass2(self, tmp_path, monkeypatch):
         """A panel-only reference names only the Dense axis; the off-panel hg19
@@ -1473,7 +1441,7 @@ class TestVariantReference:
         assert result.n_panel == 2
         assert result.n_off_panel == 1
         assert result.n_overflow == 1
-        _assert_hybrid_stores_match(two_pass, single_pass)
+        assert_hybrid_stores_match(two_pass, single_pass)
 
     def test_off_panel_and_off_reference_overflow_indices_are_remapped(self, tmp_path):
         """B1: a partial reference plus a strict-subset panel writes on-reference
@@ -1526,7 +1494,7 @@ class TestVariantReference:
         assert result.n_panel == 1
         assert result.n_off_panel == 3
         assert result.n_overflow == 3
-        _assert_hybrid_stores_match(two_pass, single_pass)
+        assert_hybrid_stores_match(two_pass, single_pass)
 
         with query_store(single_pass) as q:
             assert q.lookup([HG38_ALID_1], ["trait_a"])["z"][0] == pytest.approx(-4.0, rel=5e-3)
@@ -1587,9 +1555,9 @@ class TestVariantReference:
 
     def test_logs_single_pass(self, tmp_path, caplog):
         """A reference that names no rsids still logs the single-pass axis, and
-        logs the Pass 1 harvest it runs for identifiers (issue #255); a
-        reference that carries rsids is used as-is (covered by
-        ``TestVariantReferenceRsids.test_reference_that_names_rsids_skips_the_harvest``)."""
+        logs the Pass 1 harvest it runs for identifiers (issue #255), as one
+        that carries rsids does (#258, covered by
+        ``TestVariantReferenceRsids.test_the_references_names_win_over_the_sources``)."""
         import logging
 
         manifest = _hybrid_manifest(tmp_path)
@@ -1602,9 +1570,9 @@ class TestVariantReference:
             )
 
         assert "Single-pass build: variant axis loaded from" in caplog.text
-        # The fixture's VCF IDs are '.', so the artifact carries no rsids and
-        # the harvest runs.
-        assert "reference names no rsids; Pass 1 harvest resolved" in caplog.text
+        # The fixture's VCF IDs are '.', so the artifact carries no rsids; the
+        # harvest runs either way (#258).
+        assert "Pass 1 harvest resolved" in caplog.text
 
     def test_off_reference_variant_that_fails_liftover_is_dropped(self, tmp_path):
         """A failed off-reference lift is dropped under the threshold -- it must
@@ -2276,7 +2244,7 @@ class TestVariantReferenceRsids:
         assert _hybrid_axis_rsids(single_pass) == expected
         assert (result.n_panel, result.n_off_panel) == (2, 2)
         assert validate_store(single_pass).ok
-        _assert_hybrid_stores_match(two_pass, single_pass)
+        assert_hybrid_stores_match(two_pass, single_pass)
 
     def test_named_off_reference_row_without_an_association_is_not_stored(self, tmp_path):
         """The axis-composition difference, pinned (issue #255, round 2). A named
@@ -2514,14 +2482,10 @@ class TestVariantReferenceRsids:
         with query_store(two_pass) as query:
             assert len(query.lookup([alid], ["first", "second"])["z"]) == 2
 
-    def test_named_reference_leaves_unnamed_variants_blank(self, tmp_path, caplog):
-        """Issue #255, round 4 finding 3, a scope ruling rather than a fix: a
-        reference that already names rsids is used as-is, so a variant it does
-        not name stays blank even when a source names it -- its own unnamed
-        rows and the fold-discovered Overflow rows alike. The build warns with
-        counts on both; the two-pass build names them."""
-        import logging
-
+    def _named_reference_fixture(self, tmp_path):
+        """The #255 round-4 reviewer's fixture: an artifact naming only
+        ``1:100000:A:G -> rsPANEL``, the name the source gives it, over a source that
+        also names a reference row the artifact leaves unnamed and an Overflow row."""
         vcf = make_vcf(
             tmp_path,
             "named",
@@ -2536,6 +2500,18 @@ class TestVariantReferenceRsids:
         panel.write_text(f"{HG38_ALID_1}\n{HG38_ALID_3}\n", encoding="utf-8")
         reference = tmp_path / "named.variant-ref.tsv.gz"
         write_hg38_artifact(reference, [HG38_ALID_1, HG38_ALID_3], {HG38_ALID_1: "rsPANEL"})
+        assert read_variant_reference(reference).rsid_by_alid == {HG38_ALID_1: "rsPANEL"}, (
+            "fixture: the reference names one of its two rows"
+        )
+        return manifest, panel, reference
+
+    def test_named_reference_fills_the_rows_it_leaves_unnamed(self, tmp_path, caplog):
+        """Issue #258 (Fill): a reference that names some rsids no longer leaves the
+        rest blank. The harvest still runs and names the reference's own unnamed row
+        and the fold-discovered Overflow row, as the two-pass build does."""
+        import logging
+
+        manifest, panel, reference = self._named_reference_fixture(tmp_path)
         two_pass = tmp_path / "named-two.opengwasdb"
         single_pass = tmp_path / "named-one.opengwasdb"
         build_hybrid_from_vcf_manifest(
@@ -2547,20 +2523,35 @@ class TestVariantReferenceRsids:
                 store_id="s", release_id="r",
             )
 
-        assert _hybrid_axis_rsids(two_pass) == {
-            HG38_ALID_1: "rsPANEL",
-            HG38_ALID_3: "rsUNNAMED_REF",
-            HG38_ALID_4: "rsOFF",
-        }
-        assert _hybrid_axis_rsids(single_pass) == {
-            HG38_ALID_1: "rsPANEL",
-            HG38_ALID_3: "",
-            HG38_ALID_4: "",
-        }
+        expected = {HG38_ALID_1: "rsPANEL", HG38_ALID_3: "rsUNNAMED_REF", HG38_ALID_4: "rsOFF"}
+        assert _hybrid_axis_rsids(two_pass) == expected
+        assert _hybrid_axis_rsids(single_pass) == expected
         assert result.n_overflow == 1
         assert validate_store(single_pass).ok
-        assert "names 1 of its 2 ALIDs and leaves 1 blank" in caplog.text
-        assert "off-reference (Overflow) variant(s)" in caplog.text
+        assert "stored with no rsid" not in caplog.text
+
+    def test_a_lost_filled_name_fails_the_build(self, tmp_path, monkeypatch):
+        """The value oracle covers a named reference's fill: a rekey that loses the
+        name it fills for the reference's own unnamed row fails the build (#258)."""
+        from opengwasdb.variants.routing import names
+
+        manifest, panel, reference = self._named_reference_fixture(tmp_path)
+        real_rekey = names._rekey_rsids_to_alids
+        dropped: list[str] = []
+
+        def _drop_the_filled_entry(source_lookup, rsid_by_site):
+            rekeyed = real_rekey(source_lookup, rsid_by_site)
+            if rekeyed.pop(HG38_ALID_3, None) is not None:
+                dropped.append(HG38_ALID_3)
+            return rekeyed
+
+        monkeypatch.setattr(names, "_rekey_rsids_to_alids", _drop_the_filled_entry)
+        with pytest.raises(ValueError, match="disagrees with the routed harvest"):
+            build_hybrid_from_vcf_manifest(
+                manifest, tmp_path / "lost.opengwasdb", variant_reference=reference,
+                reference_panel=panel, store_id="s", release_id="r",
+            )
+        assert dropped, "the fault never reached the filled name"
 
     def test_admission_rejected_row_still_names_its_variant(self, tmp_path):
         """Hybrid admission (a MAF threshold here) runs inside Pass 2, after the
@@ -2627,9 +2618,10 @@ class TestVariantReferenceRsids:
                 store_id="s", release_id="r",
             )
 
-    def test_reference_that_names_rsids_skips_the_harvest(self, tmp_path, caplog):
-        """A reference carrying its own rsids is used as-is: no source read is
-        spent, and the reference's names are what the table carries."""
+    def test_the_references_names_win_over_the_sources(self, tmp_path, caplog):
+        """A reference carrying its own rsids still has the sources harvested (#258),
+        and where it names a variant its name is stored, whatever the sources call it.
+        The build counts the variants the two name differently."""
         import logging
 
         from opengwasdb.variants.reference import write_variant_reference
@@ -2656,7 +2648,8 @@ class TestVariantReferenceRsids:
             )
 
         assert _hybrid_axis_rsids(store) == {HG38_ALID_1: "rsCURATED"}
-        assert "Pass 1 harvest resolved" not in caplog.text
+        assert "Pass 1 harvest resolved" in caplog.text
+        assert "1 variant(s) the Variant Reference names differently" in caplog.text
 
     def test_sources_with_no_rsids_still_build(self, tmp_path):
         """The rule cannot fire falsely: a source that names no rsids builds a
@@ -2789,16 +2782,21 @@ def test_single_pass_off_reference_lift_refuses_to_store_unoriented_statistics(t
     stored under the projected alleles carrying the source's sign. Until the fold
     carries the lift's orientation, that build must fail rather than publish it.
 
-    The reference names only the forward variant, so both chr2 rows -- the
-    reverse-strand pair -- are off-reference and reach the fold's lift."""
+    The reference is an artifact that routes only the forward variant, so both chr2
+    rows -- the reverse-strand pair -- are off-reference and reach the fold's lift. (A
+    plain list routes every hg19 row by Pass 1's lift, which orients it: issue #260.)"""
     from residual_fixtures import write_gwas_vcf_with_eaf
 
     from opengwasdb.layouts.hybrid.key_table import UnorientedOffReferenceLiftError
+    from opengwasdb.variants.reference import write_variant_reference
 
     vcf = write_gwas_vcf_with_eaf(tmp_path / "strand.vcf", strand_vcf_rows())
     manifest = make_manifest(tmp_path, [("trait", vcf, "Trait")])
-    reference = tmp_path / "axis.alid.txt"
-    reference.write_text("3:1000:A:G\n", encoding="utf-8")
+    reference = tmp_path / "axis.variant-ref.tsv.gz"
+    write_variant_reference(
+        reference, ["3:1000:A:G"], {("3", 1_000, "G", "A"): "3:1000:A:G"}, {"3:1000:A:G": "rs3"},
+        reoriented=(),
+    )
     store_path = tmp_path / "store.opengwasdb"
 
     with pytest.raises(UnorientedOffReferenceLiftError, match="2:1000:G:A"):

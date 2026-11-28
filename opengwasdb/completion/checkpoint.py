@@ -6,6 +6,7 @@ atomically, independent of every other block's.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from collections.abc import Iterable
@@ -14,6 +15,13 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import numpy as np
+
+from opengwasdb.completion.ld_panel import (
+    PanelIdentity,
+    PanelSource,
+    check_panel_has_chromosomes,
+)
+from opengwasdb.model.files import write_atomically
 
 #: Most ALIDs are short (chr:pos:a1:a2), and a fixed-width byte string holds
 #: millions of them compactly. An ALID of more bytes than this (a long indel,
@@ -77,6 +85,71 @@ def require_fresh_destination(
                 f"discard it."
             )
         shutil.rmtree(checkpoint_dir)
+
+
+def _json_text(params: dict[str, Any]) -> str:
+    return json.dumps(params, indent=2, sort_keys=True) + "\n"
+
+
+def start_checkpoint(
+    checkpoint_dir: Path, params: dict[str, Any], panel: PanelSource,
+    *, read_from: str | Path | None = None,
+) -> None:
+    """Write a completion's ``build_params.json`` and the identity of its panel.
+
+    The parameters go down first, whole, so a run interrupted while it reads the
+    panel is already a checkpoint. The panel's digest is added atomically once it
+    has been read; ``ld_panel_path`` is the path as the caller gave it, ``ld_dir`` in
+    ``params`` the one resolved to read it from, and ``ancestry`` is the panel's.
+    """
+    path = Path(checkpoint_dir) / "build_params.json"
+    params = {
+        **params, "ancestry": panel.ancestry, "ld_panel_path": str(panel.path),
+        "ld_panel_id": panel.name,
+    }
+    write_atomically(path, _json_text(params))
+    identity = PanelIdentity.read(panel, read_from=read_from)
+    write_atomically(path, _json_text({**params, "ld_panel_digest": identity.digest}))
+
+
+def checkpointed_panel(checkpoint_dir: Path) -> PanelIdentity:
+    """The panel a checkpoint recorded, as `start_checkpoint` wrote it."""
+    params = json.loads((Path(checkpoint_dir) / "build_params.json").read_text(encoding="utf-8"))
+    path = params["ld_panel_path"]
+    return PanelIdentity(
+        path, params["ld_panel_digest"], str(Path(path) / params["ancestry"]), params["ld_panel_id"]
+    )
+
+
+def require_same_panel(checkpoint_dir: Path, params: dict[str, Any]) -> None:
+    """Refuse to resume a checkpoint against any panel but the one it was started
+    with: whose digest is not the panel's now, or that recorded none while blocks were
+    completed under a panel it cannot name. Blocks completed under one panel must not be
+    resumed beside blocks of another. A run interrupted while it read the panel has
+    completed no block, so there is nothing to mix: the digest is read and recorded now."""
+    expected = params.get("ld_panel_digest")
+    recorded = "ld_panel_path" in params  # a checkpoint before #327 names no panel but ld_dir
+    source = PanelSource(
+        params.get("ld_panel_path", params["ld_dir"]), params["ancestry"],
+        params["ld_panel_id"] if recorded else None,
+    )
+    check_panel_has_chromosomes(params["ld_dir"], source.ancestry)
+    if not expected:
+        if any((Path(checkpoint_dir) / "blocks").glob("*.npz")):
+            raise ValueError(
+                "this checkpoint records no digest of its LD panel (one written before the "
+                "panel was recorded) and holds completed blocks, so it cannot be shown to "
+                "resume against the same panel. Restart the completion with --overwrite"
+            )
+        start_checkpoint(checkpoint_dir, params, source, read_from=params["ld_dir"])
+        return
+    panel = PanelIdentity.read(source, read_from=params["ld_dir"])
+    if panel.digest != expected:
+        raise ValueError(
+            f"the LD panel at {params['ld_dir']} has digest {panel.digest}, where this "
+            f"checkpoint was started against {expected}: resuming would mix blocks completed "
+            "under two panels. Restore the panel, or restart the completion with --overwrite"
+        )
 
 
 def checkpoint_blocks_dir(checkpoint_dir: Path) -> Path:

@@ -49,9 +49,15 @@ from opengwasdb.build.eaf_orientation import (
     EafOrientationOutcome,
     EafOrientationReport,
     OrientationEvidence,
-    apply_orientation_evidence,
     site_hashes,
     verify_eaf_orientation,
+)
+from opengwasdb.build.effect_consistency import (
+    ConsistencySource,
+    EffectConsistencyReport,
+    apply_build_evidence,
+    declared_p_value_tests,
+    verify_effect_consistency,
 )
 from opengwasdb.build.info_score_filter import declared_score_state
 from opengwasdb.build.liftover import BUILTIN_CHAIN_LABEL, LiftoverFailureError
@@ -92,8 +98,9 @@ from opengwasdb.layouts.dense.top_hits import write_top_hit_indexes_for_store
 from opengwasdb.layouts.hybrid.checkpoint import (
     AXIS,
     AXIS_CANONICAL_RAW,
+    AXIS_LIFT_COLLISIONS,
+    AXIS_LIFTED_AWAY,
     AXIS_OFF_PANEL,
-    AXIS_OFF_PRIMARY,
     AXIS_PANEL,
     AXIS_SHARED,
     FOLD_DIR,
@@ -169,6 +176,7 @@ from opengwasdb.model.info_score_policy import (
     InfoScoreState,
 )
 from opengwasdb.model.maf_policy import MafPolicy, MafState
+from opengwasdb.model.p_value_test import PValueTest
 from opengwasdb.readers.column_map import ColumnMap, as_column_map, load_column_map
 from opengwasdb.readers.interface import StreamTally
 from opengwasdb.readers.registry import open_source
@@ -198,10 +206,19 @@ from opengwasdb.variants.routing import (
     LiftedUnion,
     RoutedNames,
     RouteTable,
+    SuppliedCoordinates,
     Unmatched,
     VariantRouting,
     collapse_duplicates,
+    require_observed_provenance,
     route_variants,
+)
+from opengwasdb.variants.routing.lift import (
+    NO_LIFTED_AWAY,
+    DroppedSource,
+    LiftDrops,
+    LiftedAway,
+    LiftedAwayReason,
 )
 from opengwasdb.variants.rsid import RsidConflictPolicy, RsidConflicts
 
@@ -293,7 +310,8 @@ def _resolve_column_hybrid(
     gate: Gate,
     axes: tuple[Sequence[str], ...],
     folds: bool,
-    off_primary: frozenset[str] = frozenset(),
+    lifted_away: LiftedAway = NO_LIFTED_AWAY,
+    lift_collided: frozenset[str] = frozenset(),
 ) -> tuple[_Component, _Overflow, _OffReferenceSpill]:
     """Stream one study once, routing each association to the dense fill
     (on-panel), the ragged overflow (off-panel), or -- when the route table does
@@ -323,11 +341,17 @@ def _resolve_column_hybrid(
     for placed, alids in zip(routed.placed, axes, strict=True):
         record_duplicates(gate, placed, alids)
     unmatched = routed.unmatched
+    lifted = row.source_assembly == "hg19"
     if not folds:
         # A two-pass axis is the sources' whole union, so nothing folds an
         # unmatched row onto it later: it is dropped here, and logged.
-        gate.unplaced_off_axis(unmatched.keys, off_primary)
+        gate.unplaced_unmatched(unmatched, lifted_away, lift_collided, lifted=lifted)
         unmatched = Unmatched.none()
+    elif lift_collided:
+        # The routing dropped these sources as a lift collision; a fold that met one
+        # without the other would place it (#260).
+        collided, unmatched = unmatched.split(lift_collided)
+        gate.unplaced_unmatched(collided, NO_LIFTED_AWAY, lift_collided, lifted=lifted)
     return (
         (dense.index, dense.z, dense.se, dense.eaf),
         (overflow.index, overflow.z, overflow.se, overflow.eaf),
@@ -429,12 +453,13 @@ class _Pass2Context:
     record: AdmissionRecord
     axes: tuple[Sequence[str], ...]
     folds: bool
-    off_primary: frozenset[str] = frozenset()
+    lifted_away: LiftedAway = NO_LIFTED_AWAY
+    lift_collided: frozenset[str] = frozenset()
 
 
 def _route_column(
     context: _Pass2Context, task: tuple[int, ManifestRow]
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, frozenset[str]]:
     """Route and spill one Analysis (`_route_and_spill_column`), then hand what
     it freed back to the host: a Pass 2 worker lives for the whole pass, and
     would otherwise keep the high-water of every Analysis it routes (#451)."""
@@ -447,25 +472,28 @@ def _route_column(
 
 def _route_and_spill_column(
     context: _Pass2Context, task: tuple[int, ManifestRow]
-) -> tuple[int, int, int]:
+) -> tuple[int, int, int, frozenset[str]]:
     """Route one study and spill it; its Admission part is written beside the
     Store, and only its column returns, with how many associations it left out
-    of the Dense Component and of the Overflow (issue #338)."""
+    of the Dense Component and of the Overflow (issue #338) and the keys of its
+    rows dropped as a lift collision (#325, a handful at most)."""
     col_idx, row = task
     rules = AnalysisRules(
         row.trait_id,
         info=context.info_score_policies[row.trait_id],
         maf=context.maf_policies[row.trait_id],
-    )
+    ).judging_positions_on(row.source_assembly)
     with context.record.gate(rules) as gate:
         dense, overflow, off_reference = _resolve_column_hybrid(
-            context.table, row, gate, context.axes, context.folds, context.off_primary
+            context.table, row, gate, context.axes, context.folds, context.lifted_away,
+            context.lift_collided,
         )
         parts, left_out = _stored_parts(
             row.trait_id, PhenotypeSd.dividing_by(row.se_divisor), dense, overflow, off_reference
         )
         _spill_hybrid_column(context.spill_dir, col_idx, *parts)
-    return col_idx, left_out[0], left_out[1]
+        collided = gate.lift_collided_rows
+    return col_idx, left_out[0], left_out[1], collided
 
 
 def _stored_parts(
@@ -582,12 +610,22 @@ class _SourceAxis:
     partition: _VariantPartition
     analyses: list[Analysis]
     hg38_to_source: dict[str, str | None]
-    #: The names routing resolved; pending when a reference that names none was
-    #: harvested and the fold still has off-reference keys to route (issue #255).
+    #: The names routing resolved; pending when a reference was harvested and the
+    #: fold still has off-reference keys to route (issues #255, #258).
     names: RoutedNames
     table: RouteTable
-    #: The routing keys of the sites a lift placed off the primary assembly (#376).
-    off_primary: frozenset[str] = frozenset()
+    #: The routing keys of the sites a lift placed where no Store row can be, each
+    #: with the Admission reason its rows are counted under (#376, #410).
+    lifted_away: LiftedAway = NO_LIFTED_AWAY
+    #: The sites a lift collision dropped (#325): their keys count their rows, and
+    #: the Admission record names each.
+    lift_drops: LiftDrops = LiftDrops()
+    #: Whether Pass 2's unmatched rows are folded onto the axis after it: only when
+    #: the routing did not place every source site (`VariantRouting.placed_every_site`).
+    folds: bool = False
+    #: The coordinates the sources supplied, recorded from the sites the routing read
+    #: (`VariantRouting.supplied`): what the provenance written may name (#261).
+    supplied: SuppliedCoordinates | None = None
 
 
 @dataclass(frozen=True)
@@ -608,9 +646,7 @@ class _PreparedBuild:
     hg38_to_source: dict[str, str | None]
     #: The routed names and what the sources disputed (issue #306). Pending,
     #: from a single-pass harvest, until the fold routes the off-reference keys
-    #: (issue #255); `reference_named` says the reference supplied its own
-    #: names and the sources were not read, so the build only warns about what
-    #: it leaves blank.
+    #: (issue #255), whether or not the reference names rsids of its own (#258).
     names: RoutedNames
     dense_to_shared: np.ndarray
     spill_dir: Path
@@ -618,8 +654,19 @@ class _PreparedBuild:
     #: table's only reader -- is done.
     table: RouteTable | None
     n_analyses: int
-    #: The routing keys of the sites a lift placed off the primary assembly (#376).
-    off_primary: frozenset[str] = frozenset()
+    #: Each Analysis's check against its source's own p-value (#510), measured
+    #: before anything was prepared and stamped beside the orientation evidence.
+    consistency: EffectConsistencyReport
+    #: The routing keys of the sites a lift placed where no Store row can be, each
+    #: with the Admission reason its rows are counted under (#376, #410).
+    lifted_away: LiftedAway = NO_LIFTED_AWAY
+    lift_drops: LiftDrops = LiftDrops()
+    #: Whether the fold places Pass 2's unmatched rows (`_SourceAxis.folds`). A
+    #: build resumed past the fold has none left to place.
+    folds: bool = False
+    #: `_SourceAxis.supplied`; None for a build resumed past the fold, whose map was
+    #: checked before it was recorded.
+    supplied: SuppliedCoordinates | None = None
 
 
 @dataclass(frozen=True)
@@ -798,6 +845,10 @@ def _partition_variants(
     )
 
 
+#: The effect-consistency report a resumed build reloads, beside `ORIENTATION` (#510).
+EFFECT_CONSISTENCY = "effect_consistency.json"
+
+
 @dataclass(frozen=True)
 class DeclaredPolicies:
     """The per-Analysis declared INFO and MAF policies one manifest carries.
@@ -809,6 +860,8 @@ class DeclaredPolicies:
 
     info: Mapping[str, InfoScorePolicy]
     maf: Mapping[str, MafPolicy]
+    #: Each Analysis's declared `p_value_test`, `None` where it declares none (#510).
+    p_value_tests: Mapping[str, PValueTest | None] = field(default_factory=dict)
 
 
 def _load_manifest(
@@ -853,6 +906,7 @@ def _read_declared_policies(
     return DeclaredPolicies(
         info={analysis_id: r.info for analysis_id, r in rules.items()},
         maf={analysis_id: r.maf for analysis_id, r in rules.items()},
+        p_value_tests=declared_p_value_tests(manifest_path),
     )
 
 
@@ -863,8 +917,11 @@ def _route(
 
     With ``--variant-reference`` the reference replaces Pass 1's union: its
     source keys route, its ALIDs define the Dense axis, and Pass 1 runs only
-    to harvest the names a reference lacks. Without one, Pass 1 reads every
-    source once and lifts hg19 rows. Either way the build routes by the
+    to harvest the names a reference lacks. A reference with no source keys
+    cannot route an hg19 row, so with an hg19 source Pass 1's lifted union
+    routes, as in a two-pass build with the reference as its panel (issue
+    #260). Without one, Pass 1 reads every source once and lifts hg19 rows.
+    Either way the build routes by the
     case-folded key, since a Source Reader keeps the source's allele spelling
     and an ALID is upper-case, and a harvest compares the names a site's
     spellings carry under ``--on-rsid-conflict`` (issue #379).
@@ -874,9 +931,10 @@ def _route(
     if options.variant_reference is not None:
         reference = read_variant_reference(options.variant_reference)
         panel_alids = _resolve_reference_panel(options, reference)
+        # Whether Pass 1 runs is the routing's to say: to harvest names, or to lift
+        # every site when a reference with no source keys meets an hg19 source.
         log.info(
-            "Single-pass build: variant axis loaded from %s (%d panel variants); "
-            "Pass 1 variant discovery bypassed",
+            "Single-pass build: variant axis loaded from %s (%d panel variants)",
             options.variant_reference,
             len(panel_alids),
         )
@@ -918,12 +976,12 @@ def _lift_and_partition(
     routing, panel_alids = _route(manifest_rows, options)
     if routing.names.pending:
         log.info(
-            "Single-pass build: reference names no rsids; Pass 1 harvest resolved %d "
-            "on-reference rsid(s)",
+            "Single-pass build: Pass 1 harvest resolved %d on-reference rsid(s), the "
+            "reference's own names winning",
             len(routing.names.rsid_by_alid),
         )
     hg38_to_source = routing.source_alids()
-    partition = _partition_variants(hg38_to_source.keys(), panel_alids, len(manifest_rows))
+    partition = _partition_variants(routing.reached_alids, panel_alids, len(manifest_rows))
     analyses: list[Analysis] = [manifest_row_to_analysis(row) for row in manifest_rows]
     # Building the table consumes the routing's site map, which is freed before Pass 2.
     table = routing.table(
@@ -937,7 +995,10 @@ def _lift_and_partition(
         hg38_to_source=hg38_to_source,
         names=routing.names,
         table=table,
-        off_primary=routing.off_primary,
+        lifted_away=routing.lifted_away,
+        lift_drops=routing.lift_drops,
+        folds=not routing.placed_every_site,
+        supplied=routing.supplied,
     )
 
 
@@ -1284,6 +1345,29 @@ def _merge_unknown_provenance(
 
 
 @dataclass(frozen=True)
+class _FoldUnplaced:
+    """Why a column's rows no key resolved left the axis (`Gate.unplaced_off_axis`): the
+    raw keys a lift placed where no Store row can be, with the reason each is counted
+    under (#376, #410), those a lift collision
+    dropped (#325), and the columns whose Analysis was lifted from hg19. A row of a
+    collided key is `lift_collision` in those, and `lift_ambiguous` in a GRCh38 column."""
+
+    lifted_away: LiftedAway = NO_LIFTED_AWAY
+    lift_collided: frozenset[str] = frozenset()
+    lifted_columns: frozenset[int] = frozenset()
+
+    def drop(self, gate: Gate, col: int, keys: Sequence[str]) -> None:
+        """Drop column ``col``'s rows named by ``keys``, each counted by its reason."""
+        gate.unplaced_off_axis(
+            keys, self.lifted_away, self.lift_collided, lifted=col in self.lifted_columns
+        )
+
+
+#: A fold no lift touched: each row no key resolved is `off_axis`.
+_ALL_OFF_AXIS = _FoldUnplaced()
+
+
+@dataclass(frozen=True)
 class _FoldContext:
     """What every fold worker reads. ``record`` and ``shared_alids`` are where
     a column's fold-stage drops are written and the axis that names them."""
@@ -1297,7 +1381,7 @@ class _FoldContext:
     record: AdmissionRecord
     shared_alids: Sequence[str]
     marker_dir: Path | None = None
-    off_primary: frozenset[str] = frozenset()
+    unplaced: _FoldUnplaced = _ALL_OFF_AXIS
 
 
 _fold_context: _FoldContext | None = None
@@ -1333,9 +1417,16 @@ class _FoldInputs:
     shared_sorted: list[str]
     dense_to_shared: np.ndarray
     hg38_to_source: dict[str, str | None]
-    #: The raw keys the lift placed off the primary assembly, which the fold counts
-    #: as `lift_off_primary` and not `off_axis` (#376).
-    off_primary: frozenset[str] = frozenset()
+    #: The raw keys the lift placed where no Store row can be, which the fold counts
+    #: under the reason each carries and not as `off_axis` (#376, #410).
+    lifted_away: LiftedAway = NO_LIFTED_AWAY
+    #: The off-reference sites a lift collision dropped, by raw key (#325): the
+    #: fold counts their rows as `lift_collision`, and the record names each.
+    lift_drops: LiftDrops = LiftDrops()
+    #: The coordinates of the keys the fold resolved, which Pass 2 read: what the
+    #: origins it merges into ``hg38_to_source`` may name (#261). None on an axis read
+    #: back from a checkpoint, whose map was checked before it was recorded.
+    supplied: SuppliedCoordinates | None = None
 
 
 def _folded_columns(state: CheckpointState | None) -> frozenset[int]:
@@ -1460,11 +1551,11 @@ def _record_fold(
 ) -> None:
     """Write what the fold dropped of one column's admitted rows as the
     Admission record's `fold` stage for that Analysis: its duplicates by ALID,
-    and the rows no key resolved, by raw key, as `off_axis` (D6)."""
+    and the rows no key resolved, by raw key and why (`_FoldUnplaced`, D6)."""
     alids = ctx.shared_alids
     with ctx.record.stage(ctx.record.analyses[col], "fold") as gate:
         gate.duplicates([alids[i] for i in folded.conflicting], folded.collapsed)
-        gate.unplaced_off_axis(unresolved, ctx.off_primary)
+        ctx.unplaced.drop(gate, col, unresolved)
 
 
 def _fold_column(col: int) -> int:
@@ -1557,7 +1648,7 @@ def _fold_unknown_spills(
     shared_alids: Sequence[str],
     marker_dir: Path | None = None,
     already_folded: frozenset[int] = frozenset(),
-    off_primary: frozenset[str] = frozenset(),
+    unplaced: _FoldUnplaced = _ALL_OFF_AXIS,
 ) -> None:
     """Fold every column's ``.unk.npz`` into its ``.ovf.npz`` with shared indices.
 
@@ -1576,7 +1667,8 @@ def _fold_unknown_spills(
     columns it has left, rather than re-remapping entries it already rewrote.
 
     Each column writes what it dropped to ``record``'s `fold` stage, naming a
-    row by its ALID on ``shared_alids``, the axis the fold folds onto.
+    row by its ALID on ``shared_alids``, the axis the fold folds onto, and the rows no
+    key resolved by why (``unplaced``).
     """
     table_keys, table_shared = table.keys, table.shared_index
     canonical_values, canonical_raw = canonical.values, canonical.raw
@@ -1595,7 +1687,7 @@ def _fold_unknown_spills(
         record=record,
         shared_alids=shared_alids,
         marker_dir=marker_dir,
-        off_primary=off_primary,
+        unplaced=unplaced,
     )
     pending = [col for col in range(n_analyses) if col not in already_folded]
     try:
@@ -1648,7 +1740,9 @@ def _finalise_reference_partition(
     Overflow; they are unknown until Pass 2 streams them, so their shared
     indices -- and therefore the panel's mapping onto them -- are only
     computable now. A legacy ``--reference-panel`` build already knows its
-    whole union before Pass 2 and is returned unchanged.
+    whole union before Pass 2 and is returned unchanged, and so is a build whose
+    reference names no source keys and whose hg19 sources Pass 1 lifted (issue
+    #260): its routing placed every source site (`_PreparedBuild.folds`).
 
     With a checkpoint (issue #227) the axis this computes is recorded before
     the fold's first column, and a resumed fold runs under exactly that record
@@ -1660,8 +1754,9 @@ def _finalise_reference_partition(
     attached through the same routing the association uses before the axis -- and
     the recorded rsid map -- is written.
     """
-    if options.variant_reference is None:
+    if not prepared.folds:
         _refuse_off_reference_spills(prepared.spill_dir)
+        _require_written_provenance(prepared, None)
         _record_axis(state, prepared, None)
         return prepared
     recorded = _recorded_axis(state)
@@ -1669,10 +1764,36 @@ def _finalise_reference_partition(
     prepared = _merge_off_reference_rsids(prepared, fold)
     if recorded is not None:
         return _fold_recorded_axis(prepared, options, state, recorded)
+    _require_written_provenance(prepared, fold)
     _record_axis(state, prepared, fold)
     if fold is None:
         return prepared
     return _fold_under(prepared, options, state, fold)
+
+
+def _require_written_provenance(prepared: _PreparedBuild, fold: _FoldInputs | None) -> None:
+    """Refuse a ``source_alid`` map that names a coordinate no source supplied (#261).
+
+    The map checked is the one the release writes: the fold's, which merges the
+    off-reference variants' origins into Pass 1's, or Pass 1's where nothing folds. It
+    is checked against what the sources supplied, recorded from the sites read: the
+    routing's (`VariantRouting.supplied`) and the fold's resolved keys, which Pass 2
+    read. The recorded map is checked before it is recorded, so a resumed run, which
+    reads it back, writes a checked map."""
+    if prepared.supplied is None or (fold is not None and fold.supplied is None):
+        raise ValueError(
+            "build-hybrid: the provenance about to be written has no record of the "
+            "coordinates its sources supplied to be checked against (#261)"
+        )
+    if fold is None:
+        require_observed_provenance(
+            prepared.hg38_to_source, prepared.supplied, where="build-hybrid"
+        )
+        return
+    assert fold.supplied is not None  # narrowed above
+    require_observed_provenance(
+        fold.hg38_to_source, prepared.supplied | fold.supplied, where="build-hybrid"
+    )
 
 
 def _fold_route(fold: _FoldInputs | None) -> Callable[[str], str | None] | None:
@@ -1716,38 +1837,14 @@ def _merge_off_reference_rsids(
     composed from the associations the build stores, while the two-pass axis
     keeps every source variant. The names are identical for every variant both
     axes carry (spec §4).
+
+    A fold runs only under a Variant Reference, whose names are always harvested
+    (#258), so they are pending here; `RoutedNames.finish` refuses final ones
+    rather than leave an Overflow row unnamed in silence.
     """
-    names = prepared.names
-    if not names.pending:
-        _warn_fold_left_rows_blank(prepared, fold)
-        return prepared
     # The shared table, the one that names a row (#472), is written from the
     # finished names, after this.
-    return replace(prepared, names=names.finish(_fold_route(fold)))
-
-
-def _warn_fold_left_rows_blank(
-    prepared: _PreparedBuild, fold: _FoldInputs | None
-) -> None:
-    """Warn about fold-discovered overflow rows a named reference cannot name.
-
-    The other half of `warn_reference_left_rows_blank`: a reference-based
-    single-pass build whose reference already carries rsids does not harvest, so
-    each variant the fold discovers off the reference is stored with no rsid
-    even when its source names one. Out of #255's scope; logged with a count.
-    """
-    if not prepared.names.reference_named or fold is None:
-        return
-    discovered = set(fold.off_panel) - set(prepared.partition.off_panel_alids)
-    unnamed = sum(1 for alid in discovered if not prepared.names.rsid_by_alid.get(alid))
-    if not unnamed:
-        return
-    log.warning(
-        "%d off-reference (Overflow) variant(s) this build discovered are not named by "
-        "the reference and are stored with no rsid; the reference is used as given and "
-        "the sources are not harvested (issue #255 finding 3)",
-        unnamed,
-    )
+    return replace(prepared, names=prepared.names.finish(_fold_route(fold)))
 
 
 def _fold_recorded_axis(
@@ -1780,6 +1877,9 @@ def _fold_under(
     pre-fold one `_prepare_build` may have re-written.
     """
     record = _admission_record(prepared, options, resume=True)
+    # Found while resolving this run's off-reference keys; a recorded axis has none
+    # to add, and the file its first run wrote stays.
+    record.write_lift_collisions(fold.lift_drops.sources, keep_existing=True)
     _fold_unknown_spills(
         prepared.spill_dir,
         prepared.n_analyses,
@@ -1791,7 +1891,15 @@ def _fold_under(
         shared_alids=fold.shared_sorted,
         marker_dir=_fold_marker_dir(state),
         already_folded=_folded_columns(state),
-        off_primary=fold.off_primary,
+        unplaced=_FoldUnplaced(
+            fold.lifted_away,
+            fold.lift_drops.keys,
+            frozenset(
+                col
+                for col, row in enumerate(prepared.manifest_rows)
+                if row.source_assembly == "hg19"
+            ),
+        ),
     )
     # The fold's drops are each Analysis's too, so the summary is written again.
     record.finish()
@@ -1815,6 +1923,9 @@ def _off_reference_fold_inputs(
     if off_reference is None:
         return None
     resolved = off_reference.resolved
+    # Named as the harvest's lift named each source: every reference is harvested
+    # (#258), so a named source is never recorded blank.
+    drops = prepared.lift_drops.found_by(resolved.lift_collisions)
     if not len(resolved.keys):
         return _FoldInputs(
             table=_EMPTY_KEY_TABLE,
@@ -1824,7 +1935,9 @@ def _off_reference_fold_inputs(
             shared_sorted=prepared.partition.shared_sorted,
             dense_to_shared=prepared.dense_to_shared,
             hg38_to_source=prepared.hg38_to_source,
-            off_primary=resolved.off_primary,
+            lifted_away=resolved.lifted_away,
+            lift_drops=drops,
+            supplied=SuppliedCoordinates.of_alids(resolved.origins),
         )
     table, old_to_new, index, off_panel, shared_sorted = _build_shared_key_table(
         prepared, resolved
@@ -1842,7 +1955,9 @@ def _off_reference_fold_inputs(
         shared_sorted=shared_sorted,
         dense_to_shared=dense_to_shared,
         hg38_to_source=_merge_unknown_provenance(prepared.hg38_to_source, resolved),
-        off_primary=resolved.off_primary,
+        lifted_away=resolved.lifted_away,
+        lift_drops=drops,
+        supplied=SuppliedCoordinates.of_alids(resolved.origins),
     )
 
 
@@ -1879,6 +1994,17 @@ def _record_axis(
         dense_to_shared=prepared.dense_to_shared,
         hg38_to_source=prepared.hg38_to_source,
     )
+    # The dropped sources' identities first: the axis is resumable once axis.npz is
+    # there, and a fold resumed without them would count the drops and never name them.
+    write_lines(
+        state.path / AXIS_LIFT_COLLISIONS,
+        (
+            "\t".join((*source, key))
+            for source, key in zip(
+                inputs.lift_drops.sources, inputs.lift_drops.spelled, strict=True
+            )
+        ),
+    )
     save_npz(
         state.path / AXIS,
         keys=inputs.table.keys,
@@ -1893,7 +2019,10 @@ def _record_axis(
     write_lines(state.path / AXIS_PANEL, prepared.partition.panel_sorted)
     write_lines(state.path / AXIS_OFF_PANEL, inputs.off_panel)
     write_lines(state.path / AXIS_SHARED, inputs.shared_sorted)
-    write_lines(state.path / AXIS_OFF_PRIMARY, sorted(inputs.off_primary))
+    write_lines(
+        state.path / AXIS_LIFTED_AWAY,
+        [f"{key}\t{reason}" for key, reason in sorted(inputs.lifted_away.items())],
+    )
     write_str_map(state.path / PROVENANCE_SOURCE, inputs.hg38_to_source)
     write_str_map(state.path / PROVENANCE_RSID, prepared.names.rsid_by_alid)
     # A run resumed after the fold harvests nothing, so the count is kept here.
@@ -1917,24 +2046,44 @@ def _recorded_axis(state: CheckpointState | None) -> _FoldInputs | None:
         shared_sorted=read_lines(state.path / AXIS_SHARED),
         dense_to_shared=arrays["dense_to_shared"].astype(np.int32),
         hg38_to_source=read_str_map(state.path / PROVENANCE_SOURCE),
-        off_primary=_recorded_off_primary(state),
+        lifted_away=_recorded_lifted_away(state),
+        lift_drops=_recorded_lift_drops(state),
     )
 
 
-def _recorded_off_primary(state: CheckpointState) -> frozenset[str]:
-    """The raw keys the first run's lift placed off the primary assembly (#376).
+def _recorded_lifted_away(state: CheckpointState) -> dict[str, LiftedAwayReason]:
+    """The raw keys the first run's lift placed where no Store row can be, each with
+    its Admission reason (#376, #410)."""
+    rows = [line.split("\t") for line in _recorded_lines(state, AXIS_LIFTED_AWAY)]
+    bad = [row for row in rows if len(row) != 2]
+    if bad:
+        raise ValueError(
+            f"{state.path / AXIS_LIFTED_AWAY}: {len(bad)} line(s) are not a key and a "
+            f"reason (first: {bad[0]!r}); the record cannot say why their rows were dropped"
+        )
+    return {key: LiftedAwayReason(reason) for key, reason in rows}
 
-    A recorded axis always has the file, empty when no key was placed off it; a
-    missing one is refused, since reading it as empty would publish the alt-contig
-    ALIDs the lift put on the axis uncounted."""
-    path = state.path / AXIS_OFF_PRIMARY
+
+def _recorded_lift_drops(state: CheckpointState) -> LiftDrops:
+    """The sources the first run's lift dropped as a collision, with their identities (#325)."""
+    rows = [line.split("\t") for line in _recorded_lines(state, AXIS_LIFT_COLLISIONS)]
+    return LiftDrops.read_back((DroppedSource(*row[:3]) for row in rows), (row[3] for row in rows))
+
+
+def _recorded_lines(state: CheckpointState, name: str) -> list[str]:
+    """The lines the first run's lift recorded in ``name``: the keys it placed where no
+    Store row can be (#376, #410), or the sources it dropped as a collision (#325).
+
+    A recorded axis always has the file, empty when nothing was dropped; a missing
+    one is refused, since reading it as empty would publish the rows uncounted."""
+    path = state.path / name
     if not path.exists():
         raise ValueError(
             f"The checkpoint at {state.path} records an axis but not {path.name}, which "
             f"this build writes beside it: the record is torn or predates this build. "
             f"Start the build again with --checkpoint."
         )
-    return frozenset(read_lines(path))
+    return read_lines(path)
 
 
 def _update_partition(
@@ -1986,15 +2135,20 @@ def _route_studies(
         prepared.maf_policies,
         record,
         (prepared.partition.panel_sorted, prepared.partition.shared_sorted),
-        folds=options.variant_reference is not None,
-        off_primary=prepared.off_primary,
+        folds=prepared.folds,
+        lifted_away=prepared.lifted_away,
+        lift_collided=prepared.lift_drops.keys,
     )
     tasks = [(analysis_index[row.trait_id], row) for row in rows]
     left_out = _LeftOut.none(n_analyses)
     routed = fork_each(_route_column, context, tasks, options.n_workers)
-    for i, (col, dense_left_out, overflow_left_out) in enumerate(routed):
+    seen: set[str] = set()
+    for i, (col, dense_left_out, overflow_left_out, collided) in enumerate(routed):
         left_out.dense[col], left_out.overflow[col] = dense_left_out, overflow_left_out
+        seen |= collided
         log_progress("Pass 2", i + 1, n_analyses, pass2_start, f"last: {id_by_col[col]}", every=25)
+    # What Pass 2 really dropped; a fold adds the drops it resolves itself.
+    record.write_lift_collisions(prepared.lift_drops.among(seen))
     return _RoutedSpills(
         id_by_col=id_by_col,
         pass2_start=pass2_start,
@@ -2060,6 +2214,32 @@ def _verify_eaf_orientation(
         dense_survey=dense_survey,
         overflow_survey=overflow_survey,
         report=report,
+    )
+
+
+def _verify_effect_consistency(
+    manifest_rows: Sequence[ManifestRow], policies: DeclaredPolicies, n_workers: int
+) -> EffectConsistencyReport:
+    """Check each Analysis's stored z against its source's own p-value (#510, ADR 0069).
+
+    The first phase that reads a source: each one's first rows, read once more by
+    the check itself, before the axis is lifted, partitioned or routed, so a build
+    that refuses does so before its hours of routing.
+    """
+    return verify_effect_consistency(
+        [
+            ConsistencySource(
+                row.source,
+                AnalysisRules(
+                    row.trait_id,
+                    info=policies.info[row.trait_id],
+                    maf=policies.maf[row.trait_id],
+                ),
+                policies.p_value_tests.get(row.trait_id),
+            )
+            for row in manifest_rows
+        ],
+        n_workers=n_workers,
     )
 
 
@@ -2174,9 +2354,10 @@ def _stamp_analyses(
     """Stamp each Analysis's eaf_scope (ADR 0036) and orientation columns.
     eaf_scope is the union of what the two components stored, so neither
     analyses.tsv may be written until both have been read."""
-    return apply_orientation_evidence(
+    return apply_build_evidence(
         apply_eaf_scope(prepared.analyses, dense.column_has_eaf | overflow.overflow_has_eaf),
         evidence.report,
+        prepared.consistency,
     )
 
 
@@ -2431,6 +2612,7 @@ def _prepare_build(
     manifest_rows: list[ManifestRow],
     policies: DeclaredPolicies,
     options: _BuildOptions,
+    consistency: EffectConsistencyReport,
     spill_dir: Path | None = None,
 ) -> _PreparedBuild:
     """Seam - preparation: lifting, partition/routing and the Dense skeleton,
@@ -2467,7 +2649,11 @@ def _prepare_build(
         spill_dir=spill_dir,
         table=axis.table,
         n_analyses=len(manifest_rows),
-        off_primary=axis.off_primary,
+        consistency=consistency,
+        lifted_away=axis.lifted_away,
+        lift_drops=axis.lift_drops,
+        folds=axis.folds,
+        supplied=axis.supplied,
     )
 
 
@@ -2841,14 +3027,14 @@ def build_hybrid_from_vcf_manifest(
 
     The Dense Component axis is exactly ``variant_reference``'s ALIDs (or, when
     both are given, the ``--reference-panel`` subset, which the reference must
-    carry; an inconsistent panel defers to the reference). With a reference,
-    Pass 1 variant discovery is bypassed (single-pass build, issue #186) and
-    the reference's source-coordinate map routes on-reference associations to
-    the Dense Component and off-reference ones to the Ragged Overflow during
-    Pass 2. With only ``reference_panel``, the legacy two-pass build reads every
-    source once and lifts hg19 rows. A reference that names no rsids runs Pass 1's
-    harvest, rekeyed through this build's routing, so its names match the two-pass
-    build's for every variant both axes carry (`RoutedNames.finish`, #255); rows
+    carry; an inconsistent panel defers to the reference). With a reference, its
+    source-coordinate map routes on-reference associations to the Dense Component
+    and off-reference ones to the Ragged Overflow during Pass 2 (single-pass,
+    #186); with no source keys and an hg19 source, Pass 1's lift routes (#260).
+    With only ``reference_panel``, the two-pass build reads every source once and
+    lifts hg19 rows. A reference runs Pass 1's harvest, rekeyed through this build's
+    routing, so its names are the two-pass build's for every variant both axes carry
+    (`RoutedNames.finish`, #255) unless it names the variant itself (#258); rows
     are assumed hg19 and lifted inline unless the manifest declares
     ``source_assembly=hg38`` (#85); ``source_reader_capability`` supplies the
     per-release default (#174), and ``eaf_reference`` drives the orientation check.
@@ -2934,8 +3120,7 @@ def _require_axis_source(options: _BuildOptions) -> None:
     """Refuse a build with no axis source.
 
     Either source harvests names, so ``--on-rsid-conflict`` governs both
-    (issue #379); a reference that names its own variants is used as given
-    and has no dispute for the policy to decide.
+    (issue #379), a reference that names its own variants included (#258).
     """
     if options.reference_panel is None and options.variant_reference is None:
         raise ValueError("build-hybrid needs --reference-panel or --variant-reference")
@@ -2976,13 +3161,14 @@ def _run_checkpointed_build(
         default_source_assembly=defaults.source_assembly,
         column_map=defaults.column_map,
     )
+    # A build that is not continuing a checkpoint must not orphan one in
+    # silence: refusing is the default, --overwrite the explicit discard.
+    _require_clear_checkpoint(options.out, overwrite)
+    consistency = _verify_effect_consistency(manifest_rows, policies, options.n_workers)
     state = None
     if checkpoint:
         state = _open_checkpoint(manifest_path, options, defaults, overwrite)
-    else:
-        # A build that is not continuing a checkpoint must not orphan one in
-        # silence: refusing is the default, --overwrite the explicit discard.
-        _require_clear_checkpoint(options.out, overwrite)
+        write_json(state.path / EFFECT_CONSISTENCY, consistency.payload())
     try:
         # The whole window is guarded, publication included: a commit that
         # loses a race still leaves a checkpoint, and the operator is told so.
@@ -2996,6 +3182,7 @@ def _run_checkpointed_build(
                 manifest_rows,
                 policies,
                 options,
+                consistency,
                 None if state is None else state.spill_dir,
             )
             result = _run_and_publish(prepared, options, state)
@@ -3112,6 +3299,7 @@ def resume_hybrid_build(
             f"is gone. Start the build again with --checkpoint."
         )
     _require_intact_plates(state, len(rows))
+    consistency = _resumed_consistency(state, rows, policies, options.n_workers)
     try:
         with OpenGWASDBStore.staging(
             Path(params["output_path"]),
@@ -3119,7 +3307,7 @@ def resume_hybrid_build(
             adopt=state.staged_dir,
             retain_on_failure_to=state.staged_dir,
         ) as staged:
-            prepared = _resume_prepared(staged, rows, policies, options, state)
+            prepared = _resume_prepared(staged, rows, policies, options, state, consistency)
             result = _run_and_publish(prepared, options, state)
     except BaseException:
         _log_failed_checkpoint(state)
@@ -3147,6 +3335,7 @@ def _resume_prepared(
     policies: DeclaredPolicies,
     options: _BuildOptions,
     state: CheckpointState,
+    consistency: EffectConsistencyReport,
 ) -> _PreparedBuild:
     """The prepared build a resumed phase sequence re-enters with.
 
@@ -3157,8 +3346,28 @@ def _resume_prepared(
     Dense rows and the Overflow plates are already keyed on that axis.
     """
     if state.has("fold"):
-        return _recorded_prepared(staged, manifest_rows, policies, state)
-    return _prepare_build(staged, manifest_rows, policies, options, state.spill_dir)
+        return _recorded_prepared(staged, manifest_rows, policies, state, consistency)
+    return _prepare_build(
+        staged, manifest_rows, policies, options, consistency, state.spill_dir
+    )
+
+
+def _resumed_consistency(
+    state: CheckpointState,
+    manifest_rows: Sequence[ManifestRow],
+    policies: DeclaredPolicies,
+    n_workers: int,
+) -> EffectConsistencyReport:
+    """The effect-consistency report the first run recorded before it prepared
+    anything. A checkpoint written before builds ran the check (#510) records
+    none: the check reads only the sources, so it is measured again, and recorded,
+    rather than the resume failing on a file that run never wrote."""
+    path = state.path / EFFECT_CONSISTENCY
+    if path.exists():
+        return EffectConsistencyReport.from_payload(read_json(path))
+    consistency = _verify_effect_consistency(manifest_rows, policies, n_workers)
+    write_json(path, consistency.payload())
+    return consistency
 
 
 def _recorded_prepared(
@@ -3166,6 +3375,7 @@ def _recorded_prepared(
     manifest_rows: list[ManifestRow],
     policies: DeclaredPolicies,
     state: CheckpointState,
+    consistency: EffectConsistencyReport,
 ) -> _PreparedBuild:
     """Rebuild the prepared build from the checkpoint's recorded axis alone.
 
@@ -3214,6 +3424,7 @@ def _recorded_prepared(
         spill_dir=state.spill_dir,
         table=None,
         n_analyses=len(manifest_rows),
+        consistency=consistency,
     )
 
 

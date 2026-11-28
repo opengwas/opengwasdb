@@ -24,7 +24,11 @@
     "builder": "opengwasdb.v0.1_dense_observed",
     "completion": {
       "ancestry": "EUR",
-      "ld_panel_id": "eur-hg38-gpm",
+      "ld_panel_ancestry_dir": "/store-reader-contract/build/digest/dense_completed/ld_panel/EUR",
+      "ld_panel_digest": "62ea401e22342ad040afec88a5d28cd996a8c5e72b4e1316b5447914872638fc",
+      "ld_panel_id": "sha256:62ea401e22342ad0",
+      "ld_panel_id_source": "digest",
+      "ld_panel_path": "/store-reader-contract/build/digest/dense_completed/ld_panel",
       "method": "elastic_net_eigenvectors_v2_regioncap",
       "min_cor": 0.0,
       "n_imputed": 4,
@@ -50,6 +54,28 @@
         "no_effect_allele": 0
       },
       "pca_thresh": 0.9,
+      "se_exceptions": {
+        "analyses": [
+          {
+            "analysis_id": "a",
+            "exception_rate": 0.0,
+            "n_exceptions": 0,
+            "n_imputed_exceptions": 0,
+            "n_imputed_se": 0,
+            "n_se": 200
+          },
+          {
+            "analysis_id": "b",
+            "exception_rate": 0.0,
+            "n_exceptions": 0,
+            "n_imputed_exceptions": 0,
+            "n_imputed_se": 4,
+            "n_se": 200
+          }
+        ],
+        "budget": 0.02,
+        "over_budget": []
+      },
       "se_out_of_range": {
         "imputed": [
           0,

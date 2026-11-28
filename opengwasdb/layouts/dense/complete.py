@@ -38,8 +38,11 @@ from opengwasdb.completion.checkpoint import (
     BlockCompletionResult,
     checkpoint_blocks_dir,
     checkpoint_dir_for,
+    checkpointed_panel,
     require_fresh_destination,
+    require_same_panel,
     sanitize_block_id,
+    start_checkpoint,
     write_block_checkpoint,
 )
 from opengwasdb.completion.fill_shards import (
@@ -56,20 +59,23 @@ from opengwasdb.completion.fill_shards import (
 )
 from opengwasdb.completion.ld_panel import (
     BlockPlacement,
+    PanelIdentity,
     PanelPlacement,
+    PanelSource,
     ceded_at_end,
     check_panel_has_chromosomes,
     list_all_blocks,
-    list_chromosomes,
     panel_variant,
 )
 from opengwasdb.completion.manifest import (
     build_completion_provenance,
     completed_release_manifest,
 )
+from opengwasdb.completion.options import DEFAULT_OPTIONS, CompletionOptions
 from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
+from opengwasdb.completion.se_exceptions import report_se_exceptions, se_exception_record
 from opengwasdb.completion.se_out_of_range import PROVENANCE_KEY as SE_OUT_OF_RANGE_KEY
 from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts
 from opengwasdb.encoding import (
@@ -89,6 +95,7 @@ from opengwasdb.encoding.memory import (
     FORK_FLOOR_BYTES,
     pool_workers,
 )
+from opengwasdb.encoding.se_counts import SeExceptionCounts
 from opengwasdb.encoding.timing import PhaseTimer, format_duration, log_phase, log_progress
 from opengwasdb.layouts.dense.build import write_analyses_tsv
 from opengwasdb.layouts.dense.constants import (
@@ -103,6 +110,7 @@ from opengwasdb.model.analyses import (
     read_analysis_records,
     reset_top_hit_counts,
 )
+from opengwasdb.model.ld_panel_files import list_chromosomes
 from opengwasdb.store.arrays import compressor, create_array
 from opengwasdb.store.open import (
     OpenGWASDBStore,
@@ -134,7 +142,6 @@ log = logging.getLogger(__name__)
 
 
 _COMPRESSOR = compressor()
-_LD_PANEL_ID = "eur-hg38-gpm"
 
 #: What the Association Reader names the source in a refusal.
 _SOURCE = "complete-dense, the source's Dense grid"
@@ -284,15 +291,9 @@ def _run_block(task: _BlockTask) -> BlockCompletionResult | None:
 def complete_dense_store(
     source_path: str | Path,
     dest_path: str | Path,
-    ld_dir: str | Path,
+    panel: PanelSource,
+    options: CompletionOptions = DEFAULT_OPTIONS,
     *,
-    ancestry: str = "EUR",
-    min_cor: float = 0.7,
-    thresh: float = 0.9,
-    release_id: str | None = None,
-    ld_panel_id: str = _LD_PANEL_ID,
-    n_workers: int = 1,
-    overwrite: bool = False,
     impute_analysis_ids: set[str] | None = None,
 ) -> CompletionResult:
     """Produce a Dense Reference-Completed Store Release from a `gwas`-coverage
@@ -300,7 +301,9 @@ def complete_dense_store(
 
     source_path: existing Dense Observed-Only, `gwas`-coverage store.
     dest_path:   new store directory to create.
-    ld_dir:      root of LD panel; blocks at ld_dir/{ancestry}/{chr}/{block}.*
+    panel:       the LD panel to read (`PanelSource`): every block of its ancestry's
+                 chromosomes completes the whole grid.
+    options:     min_cor and thresh shape the imputation; the rest is bookkeeping.
     impute_analysis_ids: if given, only these analyses are imputed (the
         ancestry-match filter, ADR 0028); others are carried through
         observed-only. ``None`` auto-derives the filter from the source's
@@ -310,11 +313,12 @@ def complete_dense_store(
     """
     dst = Path(dest_path)
     checkpoint_dir = checkpoint_dir_for(dst)
-    require_fresh_destination(dst, checkpoint_dir, overwrite, "resume_dense_completion")
+    require_fresh_destination(dst, checkpoint_dir, options.overwrite, "resume_dense_completion")
     source = open_store(source_path)
     check_writable_format_version(
         source.manifest.format_version, source=f"source release {Path(source_path)}"
     )
+    ld_dir, ancestry = panel.path, panel.ancestry
     check_panel_has_chromosomes(ld_dir, ancestry)
 
     if impute_analysis_ids is None:
@@ -328,28 +332,21 @@ def complete_dense_store(
         "dest_path": str(dst.resolve()),
         "ld_dir": str(Path(ld_dir).resolve()),
         "ancestry": ancestry,
-        "min_cor": min_cor,
-        "thresh": thresh,
-        "release_id": release_id,
-        "ld_panel_id": ld_panel_id,
+        "min_cor": options.min_cor,
+        "thresh": options.thresh,
+        "release_id": options.release_id,
         "impute_analysis_ids": sorted(impute_analysis_ids)
         if impute_analysis_ids is not None
         else None,
     }
-    (checkpoint_dir / "build_params.json").write_text(
-        json.dumps(build_params, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    start_checkpoint(checkpoint_dir, build_params, panel)
 
     result = _run_completion(
         Path(source_path),
         dst,
         Path(ld_dir),
         ancestry=ancestry,
-        min_cor=min_cor,
-        thresh=thresh,
-        release_id=release_id,
-        ld_panel_id=ld_panel_id,
-        n_workers=n_workers,
+        options=options,
         checkpoint_dir=checkpoint_dir,
         impute_analysis_ids=impute_analysis_ids,
     )
@@ -371,6 +368,7 @@ def resume_dense_completion(
     """
     checkpoint_dir = Path(checkpoint_dir)
     params = json.loads((checkpoint_dir / "build_params.json").read_text(encoding="utf-8"))
+    require_same_panel(checkpoint_dir, params)
 
     impute_ids = params.get("impute_analysis_ids")
     result = _run_completion(
@@ -378,11 +376,10 @@ def resume_dense_completion(
         Path(params["dest_path"]),
         Path(params["ld_dir"]),
         ancestry=params["ancestry"],
-        min_cor=params["min_cor"],
-        thresh=params["thresh"],
-        release_id=params["release_id"],
-        ld_panel_id=params["ld_panel_id"],
-        n_workers=n_workers,
+        options=CompletionOptions(
+            min_cor=params["min_cor"], thresh=params["thresh"],
+            release_id=params["release_id"], n_workers=n_workers,
+        ),
         checkpoint_dir=checkpoint_dir,
         impute_analysis_ids=set(impute_ids) if impute_ids is not None else None,
     )
@@ -446,9 +443,14 @@ class _CompletedArrays:
     n_missing_off_panel_total: int
     n_missing_imputation_failed: int
     total_imputed: int
+    #: Per Analysis, the cells the imputed mask holds (#362).
+    imputed_by_analysis: np.ndarray
     #: What the completion left out for an SE above `float16`'s range, per
     #: Analysis: source cells it did not carry, and fills it left missing (#338).
     left_out: LeftOut
+    #: Per Analysis, the SEs held as exact exceptions; None for a plane that holds
+    #: no residual SE (#390, as Ragged completion has recorded since #301).
+    se_counts: SeExceptionCounts | None
 
 
 def _read_source_axis(src: Path, impute_analysis_ids: set[str] | None) -> _SourceAxis:
@@ -836,7 +838,9 @@ def _completed_arrays(
         n_missing_off_panel_total=n_missing_off_panel_total,
         n_missing_imputation_failed=n_missing_imputation_failed,
         total_imputed=total_imputed,
+        imputed_by_analysis=tallies.imputed_by_analysis,
         left_out=left_out,
+        se_counts=tallies.se_counts,
     )
 
 
@@ -873,7 +877,7 @@ def _write_completed_manifest(
     arrays: _CompletedArrays,
     *,
     release_id: str | None,
-    ld_panel_id: str,
+    panel: PanelIdentity,
     ancestry: str,
     min_cor: float,
     thresh: float,
@@ -891,7 +895,7 @@ def _write_completed_manifest(
         release_id=release_id,
         source_format_version=source_format_version,
         completion_provenance=build_completion_provenance(
-            ld_panel_id=ld_panel_id,
+            ld_panel=panel,
             ancestry=ancestry,
             min_cor=min_cor,
             thresh=thresh,
@@ -902,9 +906,22 @@ def _write_completed_manifest(
             n_missing_imputation_failed=arrays.n_missing_imputation_failed,
             **{SE_OUT_OF_RANGE_KEY: arrays.left_out.provenance()},
             **axis.panel_placement,
+            **_se_exceptions_entry(arrays, axis),
         ),
     )
     staged.write_manifest(_record_effective_dense_chunk_shape(completed_manifest, staged))
+
+
+def _se_exceptions_entry(arrays: _CompletedArrays, axis: _UnionAxis) -> dict[str, Any]:
+    """`provenance.completion.se_exceptions` for a residual SE plane, logged as
+    Ragged completion logs it: each Analysis's share, and those over budget (#390)."""
+    if arrays.se_counts is None:
+        return {}
+    record = se_exception_record(
+        arrays.se_counts, [analysis.analysis_id for analysis in axis.src_analyses]
+    )
+    report_se_exceptions(record, where="complete-dense")
+    return {"se_exceptions": record}
 
 
 def _record_effective_dense_chunk_shape(
@@ -955,7 +972,12 @@ def _completed_analysis_rows(
     carried = carried_counts(axis.src_analyses, source_format_version, source=source)
     print("Writing analyses.tsv...")
     with staged.index_connection() as dst_db:
-        quality_rollup = completion_quality_rollup(dst_db, axis.n_analyses)
+        # The cells the mask holds, not the blocks' sum: a cell two blocks fill is
+        # one cell, and one they conflict on is none (#362).
+        quality_rollup = completion_quality_rollup(
+            dst_db, axis.n_analyses,
+            imputed=arrays.imputed_by_analysis, missing=arrays.n_missing_off_panel,
+        )
     return reset_top_hit_counts(arrays.left_out.recorded(
         [
             replace(
@@ -969,7 +991,7 @@ def _completed_analysis_rows(
                 eaf_scope=completed_eaf_scope(a, quality_rollup[i], arrays.eaf_reference_present),
                 completion_median_pearson_r=quality_rollup[i].median_pearson_r,
                 completion_n_imputed_total=quality_rollup[i].n_imputed_total,
-                completion_n_missing_total=str(int(arrays.n_missing_off_panel[i])),
+                completion_n_missing_total=quality_rollup[i].n_missing_total,
             )
             for i, a in enumerate(axis.src_analyses)
         ],
@@ -1014,11 +1036,7 @@ def _run_completion(
     ld_dir: Path,
     *,
     ancestry: str,
-    min_cor: float,
-    thresh: float,
-    release_id: str | None,
-    ld_panel_id: str,
-    n_workers: int,
+    options: CompletionOptions,
     checkpoint_dir: Path,
     impute_analysis_ids: set[str] | None = None,
 ) -> CompletionResult:
@@ -1026,6 +1044,7 @@ def _run_completion(
     orchestrator over the five phases above, all inside one staged release so
     a failure leaves no half-written store behind (resume reads the per-block
     checkpoints Phase 2 left)."""
+    min_cor, thresh, n_workers = options.min_cor, options.thresh, options.n_workers
     src = Path(source_path)
     dst = Path(dest_path)
     timer = PhaseTimer()
@@ -1053,8 +1072,8 @@ def _run_completion(
             source_format_version,
             axis,
             arrays,
-            release_id=release_id,
-            ld_panel_id=ld_panel_id,
+            release_id=options.release_id,
+            panel=checkpointed_panel(checkpoint_dir),
             ancestry=ancestry,
             min_cor=min_cor,
             thresh=thresh,
@@ -1231,10 +1250,10 @@ def _band_bytes(n_analyses: int, band_rows: int) -> int:
     return _BAND_FIXED_BYTES + _BAND_BYTES_PER_CELL * n_analyses * band_rows
 
 
-#: What the parent holds of one band's outcome until it takes it: two counts a
-#: band per Analysis, and the band's table entries
-#: (`EXCEPTION_CELLS_PER_RESULT_BYTE`).
-_BAND_RESULT_BYTES_PER_ANALYSIS = 16
+#: What the parent holds of one band's outcome until it takes it: four `int64`
+#: counts a band per Analysis (off-panel missing, SE out of range, imputed out of
+#: range, imputed), and the band's table entries (`EXCEPTION_CELLS_PER_RESULT_BYTE`).
+_BAND_RESULT_BYTES_PER_ANALYSIS = 32
 
 
 def _band_result_bytes(n_analyses: int, band_rows: int) -> int:
@@ -1298,12 +1317,18 @@ class _BandOutcome:
     se_out_of_range: np.ndarray
     imputed_out_of_range: np.ndarray
     n_imputed: int
+    #: Per Analysis, the cells the band's imputed mask holds once its conflicted
+    #: cells are cleared: what `analyses.tsv` declares (#362), which the
+    #: `completion_quality` rows' sum is not where two blocks fill one cell.
+    imputed_by_analysis: np.ndarray
     n_missing_imputation_failed: int
     tables: SideTables
     #: The fill records at the cells two fills disagree on, none of them kept
     #: (D5), for the parent to log (D8), and how many cells they are at.
     dropped: np.ndarray
     n_conflicted_cells: int
+    #: The band's SEs held as exact exceptions per Analysis, None unless residual.
+    se_counts: SeExceptionCounts | None
 
 
 def _complete_band(plan: _BandPlan, band: int) -> _BandOutcome:
@@ -1317,17 +1342,22 @@ def _complete_band(plan: _BandPlan, band: int) -> _BandOutcome:
     n_missing_off_panel = np.zeros(plan.n_analyses, dtype=np.int64)
     _count_band_off_panel_missing(n_missing_off_panel, cells.z, plan.on_panel, r0, r1)
     assert cells.imputed is not None
-    n_imputed, dropped, n_conflicted = _apply_fill_shard_records(
+    imputed_by_analysis, dropped, n_conflicted = _apply_fill_shard_records(
         cells.z, cells.se, cells.imputed, fill_shard_path(plan.fill_shard_dir, band), r0,
         impute_mask=plan.impute_mask,
     )
     n_failed = _count_band_imputation_failed(cells.z, plan.on_panel, r0, r1)
-    codes, tables, left_out = _encode_band(plan, cells, r0)
+    codes, tables, left_out, left_out_off_panel, se_counts = _encode_band(plan, cells, r0)
+    # An off-panel cell the encode leaves out is a cell the release holds no value at.
+    n_missing_off_panel += left_out_off_panel
     del cells
     _write_band(plan, codes, r0, r1)
     return _BandOutcome(
-        band, n_missing_off_panel, *left_out, n_imputed, n_failed, tables, dropped,
+        band, n_missing_off_panel, *left_out, int(imputed_by_analysis.sum()), imputed_by_analysis,
+        n_failed, tables,
+        dropped,
         n_conflicted,
+        se_counts,
     )
 
 
@@ -1418,12 +1448,12 @@ def _apply_fill_shard_records(
     r0: int,
     *,
     impute_mask: np.ndarray | None = None,
-) -> tuple[int, np.ndarray, int]:
+) -> tuple[np.ndarray, np.ndarray, int]:
     """Stream one band's fill-shard records into its NaN-seeded z and SE bands.
 
     A record lands only in a cell the source left missing -- it never
     overwrites an observed value -- and fills z and SE together and marks the
-    cell imputed. Returns the count of cells filled, the records at cells two
+    cell imputed. Returns per Analysis the cells filled, the records at cells two
     fills disagree on, and how many cells those are.
 
     A cell two records fill is resolved by Association Admission's duplicate
@@ -1437,7 +1467,7 @@ def _apply_fill_shard_records(
     here disagree -- the disagreement that let ``completion_quality`` count
     cells the release did not hold -- so it is said, not silently re-filtered.
     """
-    filled = 0
+    filled = np.zeros(imputed_band.shape[1], dtype=np.int64)
     for records in iter_fill_records(shard_path):
         lr = records["row"] - r0
         ai = records["ai"]
@@ -1447,7 +1477,7 @@ def _apply_fill_shard_records(
                 f"(first {int(ai[~impute_mask[ai]][0])}); the filter applied at "
                 "checkpoint resolution and the one applied here disagree"
             )
-        filled += apply_fill_batch(zb, sb, imputed_band, lr, ai, records["z"], records["se"])
+        apply_fill_batch(zb, sb, imputed_band, lr, ai, records["z"], records["se"], filled)
     if imputed_band.max(initial=0) < CONFLICTED:
         return filled, _NO_FILLS, 0
     conflicted = imputed_band == CONFLICTED
@@ -1493,10 +1523,18 @@ def _band_planes(plan: _BandPlan) -> tuple[str, ...]:
 
 def _encode_band(
     plan: _BandPlan, cells: CellValues, r0: int
-) -> tuple[dict[str, np.ndarray], SideTables, tuple[np.ndarray, np.ndarray]]:
+) -> tuple[
+    dict[str, np.ndarray],
+    SideTables,
+    tuple[np.ndarray, np.ndarray],
+    np.ndarray,
+    SeExceptionCounts | None,
+]:
     """Judge and encode the band a step at a time: each plane's codes, the
-    band's side-table entries, and per Analysis the cells it left out for an SE
-    above `float16`'s range, and how many of those were flagged imputed.
+    band's side-table entries, per Analysis the cells it left out for an SE
+    above `float16`'s range and how many of those were flagged imputed, and how
+    many of those cells sit on off-panel rows; and, under a residual SE plane, the
+    SEs held as exact exceptions per Analysis.
 
     Each step is placed at its own rows, so a cell's code and its side-table
     entry are the ones a whole-band encode gives it.
@@ -1509,6 +1547,8 @@ def _encode_band(
     )
     se_out_of_range = np.zeros(plan.n_analyses, dtype=np.int64)
     imputed_out_of_range = np.zeros(plan.n_analyses, dtype=np.int64)
+    off_panel_left_out = np.zeros(plan.n_analyses, dtype=np.int64)
+    se_counts = SeExceptionCounts.zeros(plan.n_analyses) if plan.codec.plan.se.is_residual else None
     for s0, s1 in plan.steps(n_rows):
         step = CellValues(
             cells.z[s0:s1],
@@ -1520,9 +1560,20 @@ def _encode_band(
             step,
             Placement.band(r0 + s0, r0 + s1, plan.n_analyses),
             where=f"complete-dense, rows {r0 + s0:,} to {r0 + s1:,}",
+            # Every cell not flagged imputed was decoded from the source Store,
+            # so its EAF and SE must decode to themselves (#301, #390).
+            carried=None if step.imputed is None else np.asarray(step.imputed) == 0,
         )
         se_out_of_range += encoded.storable.se_out_of_range
         imputed_out_of_range += encoded.storable.imputed_out_of_range
+        off = plan.on_panel[r0 + s0 : r0 + s1] == 0
+        off_panel_left_out += (~encoded.storable.stored[off]).sum(axis=0, dtype=np.int64)
+        if se_counts is not None:
+            assert encoded.imputed is not None
+            se_counts.add(
+                encoded.se, np.broadcast_to(np.arange(plan.n_analyses), encoded.se.shape),
+                encoded.imputed,
+            )
         held = {"z": encoded.z, "se": encoded.se, "imputed": encoded.imputed, "eaf": encoded.eaf}
         for name in codes:
             codes[name][s0:s1] = held[name]
@@ -1533,7 +1584,7 @@ def _encode_band(
         ):
             builder.add(table.index, table.value)
     tables = SideTables(z_overflow.table(), eaf_exceptions.table(), se_exceptions.table())
-    return codes, tables, (se_out_of_range, imputed_out_of_range)
+    return codes, tables, (se_out_of_range, imputed_out_of_range), off_panel_left_out, se_counts
 
 
 def _write_band(plan: _BandPlan, codes: dict[str, np.ndarray], r0: int, r1: int) -> None:
@@ -1550,13 +1601,20 @@ class _BandTallies:
     n_missing_off_panel: np.ndarray
     se_out_of_range: np.ndarray
     imputed_out_of_range: np.ndarray
+    imputed_by_analysis: np.ndarray
     total_imputed: int = 0
     n_missing_imputation_failed: int = 0
+    se_counts: SeExceptionCounts | None = None
 
     def add(self, outcome: _BandOutcome) -> None:
+        if outcome.se_counts is not None:
+            if self.se_counts is None:
+                self.se_counts = SeExceptionCounts.zeros(len(outcome.imputed_by_analysis))
+            self.se_counts.merge(outcome.se_counts)
         self.n_missing_off_panel += outcome.n_missing_off_panel
         self.se_out_of_range += outcome.se_out_of_range
         self.imputed_out_of_range += outcome.imputed_out_of_range
+        self.imputed_by_analysis += outcome.imputed_by_analysis
         self.total_imputed += outcome.n_imputed
         self.n_missing_imputation_failed += outcome.n_missing_imputation_failed
 
@@ -1686,6 +1744,7 @@ def _run_bands(
         n_missing_off_panel=np.zeros(plan.n_analyses, dtype=np.int64),
         se_out_of_range=np.zeros(plan.n_analyses, dtype=np.int64),
         imputed_out_of_range=np.zeros(plan.n_analyses, dtype=np.int64),
+        imputed_by_analysis=np.zeros(plan.n_analyses, dtype=np.int64),
     )
     tables = _BandTables()
     n_bands = -(-plan.n_variants // plan.band_rows)

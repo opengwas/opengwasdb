@@ -6,7 +6,7 @@ shape, values, NaN-aware), the same encodings, and the same `manifest.json` and
 `analyses.tsv` apart from `created_at`. Compressed chunk *bytes* are not the
 oracle: Blosc produces different-but-equivalent streams for identical input in
 different processes (#230/#231), so the comparison is on what the store decodes
-to -- `_assert_hybrid_stores_match`, which is also what the Hybrid suite's own
+to -- `assert_hybrid_stores_match`, which is also what the Hybrid suite's own
 serial-versus-parallel comparisons use.
 
 **The footprint ceiling, stated up front.** A checkpoint's cost is dominated by
@@ -33,8 +33,8 @@ from pathlib import Path
 
 import pytest
 from cli_output import normalize_cli_output
+from store_assertions import assert_hybrid_stores_match
 from test_hybrid_build import (
-    _assert_hybrid_stores_match,
     _hybrid_axis_rsids,
     _hybrid_manifest,
     _panel_file,
@@ -167,7 +167,7 @@ def _dir_bytes(path: Path) -> int:
 def _assert_manifests_match(before: Path, after: Path) -> None:
     """Both manifests equal apart from `created_at`, as byte-identity defines.
 
-    `_assert_hybrid_stores_match` covers every decoded array, the variant
+    `assert_hybrid_stores_match` covers every decoded array, the variant
     tables and `analyses.tsv` but deliberately skips the manifests, whose
     `created_at` always differs. This is the other half of the contract, and
     the same comparison the real-data evidence's `verify_227.py` makes.
@@ -195,7 +195,7 @@ class TestCheckpointedBuild:
         assert not checkpoint_dir_for(checked).exists()
         assert list(tmp_path.glob(f".{plain.name}.hybridspill.*")) == []
         assert list(tmp_path.glob(f".{checked.name}.hybridspill.*")) == []
-        _assert_hybrid_stores_match(plain, checked)
+        assert_hybrid_stores_match(plain, checked)
         _assert_manifests_match(plain, checked)
 
     def test_resume_after_fit_crash_matches_uninterrupted(self, tmp_path, monkeypatch):
@@ -220,7 +220,7 @@ class TestCheckpointedBuild:
         assert not checkpoint_dir.exists()
         assert resumed.n_overflow == 1
         assert validate_store(store).ok
-        _assert_hybrid_stores_match(plain, store)
+        assert_hybrid_stores_match(plain, store)
         _assert_manifests_match(plain, store)
 
     def test_resume_preserves_info_score_provenance(self, tmp_path, monkeypatch):
@@ -257,7 +257,7 @@ class TestCheckpointedBuild:
         assert (record / "admission.json").read_bytes() == (
             admission_record_for(plain) / "admission.json"
         ).read_bytes()
-        _assert_hybrid_stores_match(plain, store)
+        assert_hybrid_stores_match(plain, store)
         _assert_manifests_match(plain, store)
 
     def test_resume_refuses_a_record_that_lost_a_part(self, tmp_path, monkeypatch):
@@ -292,7 +292,7 @@ class TestCheckpointedBuild:
 
         resume_hybrid_build(checkpoint_dir_for(store), n_workers=2)
 
-        _assert_hybrid_stores_match(plain, store)
+        assert_hybrid_stores_match(plain, store)
         _assert_manifests_match(plain, store)
 
     def test_resume_does_not_re_measure_the_plan_or_the_axis(self, tmp_path, monkeypatch):
@@ -369,7 +369,7 @@ class TestCheckpointedBuild:
         monkeypatch.undo()
 
         assert validate_store(store).ok
-        _assert_hybrid_stores_match(plain, store)
+        assert_hybrid_stores_match(plain, store)
         _assert_manifests_match(plain, store)
 
     def test_mid_fold_crash_resumes_with_the_harvested_rsids(self, tmp_path, monkeypatch):
@@ -412,7 +412,7 @@ class TestCheckpointedBuild:
 
         assert validate_store(store).ok
         assert _hybrid_axis_rsids(store) == uninterrupted
-        _assert_hybrid_stores_match(plain, store)
+        assert_hybrid_stores_match(plain, store)
         _assert_manifests_match(plain, store)
 
     def test_partial_pass2_resumes_from_scratch_and_matches(self, tmp_path, monkeypatch):
@@ -442,7 +442,7 @@ class TestCheckpointedBuild:
         assert not (checkpoint_dir / "pass2.done").exists()
         resume_hybrid_build(checkpoint_dir)
         assert validate_store(store).ok
-        _assert_hybrid_stores_match(plain, store)
+        assert_hybrid_stores_match(plain, store)
         _assert_manifests_match(plain, store)
 
     def test_failure_log_names_the_checkpoint_and_the_resume(
@@ -577,7 +577,7 @@ class TestRefusals:
         with pytest.raises(ValueError, match="records format version"):
             resume_hybrid_build(checkpoint_dir)
 
-    @pytest.mark.parametrize("older", [1, 2, 3, 4])
+    @pytest.mark.parametrize("older", [1, 2, 3, 4, 5, 6, 7])
     def test_an_older_format_checkpoint_is_refused(self, tmp_path, monkeypatch, older):
         """An older record is refused, never reinterpreted.
 
@@ -586,18 +586,18 @@ class TestRefusals:
         blank-frequency associations that flooded a common-variant Store. Format 2
         (opengwasdb#357) records its Pass 2 counts in a shape that predates
         Association Admission's reasons. Format 4 records no count of what Pass 2
-        left out for an SE above float16's range (opengwasdb#338). A resume must
-        refuse each outright.
+        left out for an SE above float16's range (opengwasdb#338). Format 5 records
+        no lift-collision identities (opengwasdb#325). Format 6 records no lift into
+        a GRCh38 gap (opengwasdb#410, #261). Formats 6 and 7, past the fold under a
+        reference that names rsids, record the names that reference left blank,
+        unharvested, and null conflict counts (opengwasdb#258). A resume must refuse
+        each outright.
         """
         store = self._failed_build(tmp_path, monkeypatch)
         checkpoint_dir = checkpoint_dir_for(store)
         # Fixture first: a real checkpoint with real spills is what an older
         # record is; refusing an empty directory would prove nothing.
         assert _dir_bytes(checkpoint_dir / "spill") > 0
-        assert CHECKPOINT_FORMAT_VERSION == 5, (
-            "format 5 records what Pass 2 left out for an SE above float16's range "
-            "(opengwasdb#338)"
-        )
 
         path = checkpoint_dir / "build_params.json"
         params = json.loads(path.read_text(encoding="utf-8"))
@@ -609,18 +609,34 @@ class TestRefusals:
             resume_hybrid_build(checkpoint_dir)
         assert not store.exists(), "a refused resume publishes nothing"
 
-    def test_a_recorded_axis_without_its_off_primary_keys_is_refused(self, tmp_path):
-        """A current-format checkpoint always writes the keys a lift placed off the
-        primary assembly, an empty file when none; a missing one is a torn record,
+    def test_a_recorded_axis_without_its_lifted_away_keys_is_refused(self, tmp_path):
+        """A current-format checkpoint always writes the keys a lift placed where no
+        Store row can be, an empty file when none; a missing one is a torn record,
         and reading it as empty would publish uncounted alt-contig ALIDs (#376)."""
-        from opengwasdb.layouts.hybrid.build import _recorded_off_primary
+        from opengwasdb.layouts.hybrid.build import _recorded_lifted_away
         from opengwasdb.layouts.hybrid.checkpoint import CheckpointState
 
         state = CheckpointState(path=tmp_path, params={}, completed=())
-        with pytest.raises(ValueError, match="axis_off_primary.txt.*Start the build again"):
-            _recorded_off_primary(state)
-        (tmp_path / "axis_off_primary.txt").write_text("", encoding="utf-8")
-        assert _recorded_off_primary(state) == frozenset()
+        with pytest.raises(ValueError, match="axis_lifted_away.tsv.*Start the build again"):
+            _recorded_lifted_away(state)
+        (tmp_path / "axis_lifted_away.tsv").write_text("", encoding="utf-8")
+        assert _recorded_lifted_away(state) == {}
+
+    def test_a_recorded_lifted_away_key_keeps_its_reason(self, tmp_path):
+        """Each key is read back with the reason its rows are counted under (#410): a key
+        with no reason is refused, since the record could not say why it was dropped."""
+        from opengwasdb.layouts.hybrid.build import _recorded_lifted_away
+        from opengwasdb.layouts.hybrid.checkpoint import CheckpointState
+
+        state = CheckpointState(path=tmp_path, params={}, completed=())
+        path = tmp_path / "axis_lifted_away.tsv"
+        path.write_text("1:5:A:G\tin_assembly_gap\n5:9:C:T\tlift_off_primary\n", encoding="utf-8")
+        assert _recorded_lifted_away(state) == {
+            "1:5:A:G": "in_assembly_gap", "5:9:C:T": "lift_off_primary",
+        }
+        path.write_text("1:5:A:G\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="not a key and a reason"):
+            _recorded_lifted_away(state)
 
     def test_torn_phase_record_is_refused(self, tmp_path, monkeypatch):
         """A marker set with a gap cannot come from a build this code ran."""
@@ -759,7 +775,7 @@ class TestCli:
         resumed = CliRunner().invoke(app, [*args, "--resume", "--n-workers", "2"])
         assert resumed.exit_code == 0, resumed.output
         assert validate_store(store).ok
-        _assert_hybrid_stores_match(plain, store)
+        assert_hybrid_stores_match(plain, store)
         _assert_manifests_match(plain, store)
 
     def test_cli_resume_refuses_a_different_parameter(self, tmp_path, monkeypatch):

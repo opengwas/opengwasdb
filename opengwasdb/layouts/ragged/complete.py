@@ -55,7 +55,9 @@ from opengwasdb.completion.block import (
 from opengwasdb.completion.ld_panel import (
     BlockPlacement,
     LDBlock,
+    PanelIdentity,
     PanelPlacement,
+    PanelSource,
     SharedEndpoint,
     check_panel_has_chromosomes,
     panel_variant,
@@ -65,10 +67,12 @@ from opengwasdb.completion.manifest import (
     build_completion_provenance,
     completed_release_manifest,
 )
+from opengwasdb.completion.options import DEFAULT_OPTIONS, CompletionOptions
 from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.completion.reference_eaf import completed_eaf_scope, panel_reference_eaf
 from opengwasdb.completion.regions import analysis_regions, inside, region_blocks
 from opengwasdb.completion.schema import completion_quality_rollup, create_completion_quality_table
+from opengwasdb.completion.se_exceptions import report_se_exceptions, se_exception_record
 from opengwasdb.completion.se_out_of_range import PROVENANCE_KEY as SE_OUT_OF_RANGE_KEY
 from opengwasdb.completion.se_out_of_range import LeftOut, carried_counts
 from opengwasdb.encoding.association_codec import log_se_out_of_range
@@ -79,7 +83,6 @@ from opengwasdb.layouts.ragged.top_hits import build_ragged_top_hit_indexes
 from opengwasdb.layouts.ragged.zarr_csr import (
     RaggedCSRWriter,
     ReferenceCompletion,
-    SeExceptionCounts,
 )
 from opengwasdb.model.analyses import (
     Analysis,
@@ -97,7 +100,7 @@ from opengwasdb.store.open import (
     open_store,
 )
 from opengwasdb.store_reader.associations import Associations, Cells, CsrReader
-from opengwasdb.store_reader.encoding.plan import SE_EXCEPTION_BUDGET, StoreEncoding
+from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.store_reader.manifest import StoreManifest
 from opengwasdb.store_reader.stored import eaf_baseline, se_coefficients, sequence_arrays
 from opengwasdb.store_reader.variant_axis import VariantRecord
@@ -107,7 +110,6 @@ from opengwasdb.variants.routing import Duplicates, collapse_duplicates
 
 log = logging.getLogger(__name__)
 
-_LD_PANEL_ID = "eur-hg38-gpm"
 
 
 @dataclass(frozen=True)
@@ -308,16 +310,10 @@ def _run_block(task: _BlockTask) -> checkpoint.BlockCompletionResult | None:
 def complete_ragged_store(
     source_path: str | Path,
     dest_path: str | Path,
-    ld_dir: str | Path,
+    panel: PanelSource,
+    options: CompletionOptions = DEFAULT_OPTIONS,
     *,
-    ancestry: str = "EUR",
     cis_window_bp: int = 1_000_000,
-    min_cor: float = 0.7,
-    thresh: float = 0.9,
-    release_id: str | None = None,
-    ld_panel_id: str = _LD_PANEL_ID,
-    n_workers: int = 1,
-    overwrite: bool = False,
     impute_analysis_ids: set[str] | None = None,
     region_cap_bp: int | None = REGION_CAP_BP,
 ) -> CompletionResult:
@@ -325,7 +321,10 @@ def complete_ragged_store(
 
     source_path: existing observed-only ragged store.
     dest_path:   new store directory to create.
-    ld_dir:      root of LD panel; blocks at ld_dir/{ancestry}/{chr}/{block}.*
+    panel:       the LD panel to read (`PanelSource`); only the blocks that overlap an
+                 Analysis's regions are read.
+    options:     the tuning of the run (`CompletionOptions`); `cis_window_bp` is the
+                 ragged-only one, passed beside it.
     impute_analysis_ids: if given, only these analyses are imputed (the
         ancestry-match filter, ADR 0028); others are carried through
         observed-only. ``None`` auto-derives the filter from the source's
@@ -334,12 +333,15 @@ def complete_ragged_store(
         information).
     The regions are the source's `regions.tsv` (`completion.regions`, issue #430).
     """
+    ld_dir, ancestry = panel.path, panel.ancestry
     table, impute_analysis_ids, resolved = _check_completion_inputs(
         Path(source_path), ld_dir, ancestry, cis_window_bp, impute_analysis_ids
     )
     dst = Path(dest_path)
     checkpoint_dir = checkpoint.checkpoint_dir_for(dst)
-    checkpoint.require_fresh_destination(dst, checkpoint_dir, overwrite, "resume_ragged_completion")
+    checkpoint.require_fresh_destination(
+        dst, checkpoint_dir, options.overwrite, "resume_ragged_completion"
+    )
 
     (checkpoint_dir / "blocks").mkdir(parents=True)
     build_params = {
@@ -348,17 +350,14 @@ def complete_ragged_store(
         "ld_dir": str(Path(ld_dir).resolve()),
         "ancestry": ancestry,
         "cis_window_bp": cis_window_bp,
-        "min_cor": min_cor,
-        "thresh": thresh,
-        "release_id": release_id,
-        "ld_panel_id": ld_panel_id,
+        "min_cor": options.min_cor,
+        "thresh": options.thresh,
+        "release_id": options.release_id,
         "impute_analysis_ids": None if impute_analysis_ids is None else sorted(impute_analysis_ids),
         "region_cap_bp": region_cap_bp,
         **_region_params(table),
     }
-    (checkpoint_dir / "build_params.json").write_text(
-        json.dumps(build_params, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    checkpoint.start_checkpoint(checkpoint_dir, build_params, panel)
 
     result = _run_completion(
         Path(source_path),
@@ -366,11 +365,7 @@ def complete_ragged_store(
         Path(ld_dir),
         ancestry=ancestry,
         cis_window_bp=cis_window_bp,
-        min_cor=min_cor,
-        thresh=thresh,
-        release_id=release_id,
-        ld_panel_id=ld_panel_id,
-        n_workers=n_workers,
+        options=options,
         checkpoint_dir=checkpoint_dir,
         impute_analysis_ids=impute_analysis_ids,
         region_cap_bp=region_cap_bp,
@@ -397,6 +392,7 @@ def resume_ragged_completion(
     """
     checkpoint_dir = Path(checkpoint_dir)
     params = json.loads((checkpoint_dir / "build_params.json").read_text())
+    checkpoint.require_same_panel(checkpoint_dir, params)
 
     impute_ids = params.get("impute_analysis_ids")
     impute_ids = set(impute_ids) if impute_ids is not None else None
@@ -410,11 +406,10 @@ def resume_ragged_completion(
         Path(params["ld_dir"]),
         ancestry=params["ancestry"],
         cis_window_bp=params["cis_window_bp"],
-        min_cor=params["min_cor"],
-        thresh=params["thresh"],
-        release_id=params["release_id"],
-        ld_panel_id=params["ld_panel_id"],
-        n_workers=n_workers,
+        options=CompletionOptions(
+            min_cor=params["min_cor"], thresh=params["thresh"],
+            release_id=params["release_id"], n_workers=n_workers,
+        ),
         checkpoint_dir=checkpoint_dir,
         impute_analysis_ids=impute_ids,
         region_cap_bp=params.get("region_cap_bp"),
@@ -566,11 +561,23 @@ class _CompletedCsr:
     and store."""
 
     writer: RaggedCSRWriter
-    total_imputed: int
-    total_missing: int
+    #: Per Analysis, the imputed rows it holds once its conflicted fills are
+    #: cleared, and the panel rows it holds no value at: what `analyses.tsv`
+    #: declares (#362). The `completion_quality` rows' sums are more where two
+    #: blocks attempt one row.
+    imputed_by_analysis: np.ndarray
+    missing_by_analysis: np.ndarray
     #: Per Analysis, the fills the checkpoint merge left missing for an SE above
     #: `float16`'s range (issue #338); set once the merge has run.
     left_missing: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int64))
+
+    @property
+    def total_imputed(self) -> int:
+        return int(self.imputed_by_analysis.sum())
+
+    @property
+    def total_missing(self) -> int:
+        return int(self.missing_by_analysis.sum())
 
     @property
     def left_out(self) -> LeftOut:
@@ -1213,18 +1220,9 @@ def _assemble_completed_csr(
         len(axis.variants),
         ReferenceCompletion(tuple(analysis_ids), eaf_reference, where="complete-ragged"),
     )
-    largest = _largest_analysis(plan.source)
-    workers = pool_workers(
-        n_workers,
-        _assembly_bytes(len(axis.variants), largest),
-        what="Assembly",
-        unit=f"completed Analysis over {len(axis.variants):,} variants",
-        units=plan.state.n_analyses,
-        parent_bytes=resident_bytes()
-        + _HELD_BYTES_PER_CELL * (_source_cells(plan.source) + int(added.sum())),
-        result_bytes=_RESULT_BYTES_PER_ROW * (largest + int(added.max(initial=0))),
-    )
-    total_imputed = total_missing = 0
+    workers = _assembly_workers(assembly, n_workers, added)
+    imputed_by_analysis = np.zeros(plan.state.n_analyses, dtype=np.int64)
+    missing_by_analysis = np.zeros(plan.state.n_analyses, dtype=np.int64)
     items = _analysis_fills(fill_shard_dir, batch_of)
     outcomes = ordered_map(_complete_analysis, items, workers, shared=assembly)
     for expected, (ai, completed) in enumerate(outcomes):
@@ -1234,14 +1232,35 @@ def _assemble_completed_csr(
             completed.vi, completed.z, completed.se, eaf=completed.eaf, imputed=completed.imp,
             where=f"complete-ragged, Analysis {analysis_ids[ai]}", phenotype_sd=PhenotypeSd.APPLIED,
         )
-        total_imputed += completed.n_imputed
-        total_missing += completed.n_missing
+        imputed_by_analysis[ai] = completed.n_imputed
+        missing_by_analysis[ai] = completed.n_missing
         if (ai + 1) % 500 == 0:
             print(
                 f"  {ai + 1:,} / {plan.state.n_analyses:,} analyses | "
-                f"imputed {total_imputed:,} | missing {total_missing:,}"
+                f"imputed {int(imputed_by_analysis.sum()):,} | "
+                f"missing {int(missing_by_analysis.sum()):,}"
             )
-    return _CompletedCsr(writer=writer, total_imputed=total_imputed, total_missing=total_missing)
+    return _CompletedCsr(
+        writer=writer, imputed_by_analysis=imputed_by_analysis,
+        missing_by_analysis=missing_by_analysis,
+    )
+
+
+def _assembly_workers(assembly: _Assembly, n_workers: int, added: np.ndarray) -> int:
+    """The assembly pool's size: it holds every completed row by the end, at most
+    the source's rows and what completion may add to each Analysis."""
+    plan, axis = assembly.plan, assembly.axis
+    largest = _largest_analysis(plan.source)
+    return pool_workers(
+        n_workers,
+        _assembly_bytes(len(axis.variants), largest),
+        what="Assembly",
+        unit=f"completed Analysis over {len(axis.variants):,} variants",
+        units=plan.state.n_analyses,
+        parent_bytes=resident_bytes()
+        + _HELD_BYTES_PER_CELL * (_source_cells(plan.source) + int(added.sum())),
+        result_bytes=_RESULT_BYTES_PER_ROW * (largest + int(added.max(initial=0))),
+    )
 
 
 def _largest_analysis(source: CsrReader) -> int:
@@ -1394,68 +1413,6 @@ def _encode_plan(
     )
 
 
-def _se_exception_record(counts: SeExceptionCounts, analysis_ids: list[str]) -> dict[str, Any]:
-    """Each Analysis's share of SEs held as exact exceptions, in `analyses.tsv`
-    order, and the Analyses above the 2% budget (spec §6a, issue #301).
-
-    The budget is a build's criterion for choosing a residual range. Completion
-    keeps its source's range and model, so it measures the share it produced
-    rather than enforcing it: the record and `_report_se_exceptions` are how a
-    breach by imputed cells becomes visible. An Analysis with no SE has no
-    share, recorded as null rather than 0. The writer counts as it codes each
-    region (`SeExceptionCounts`).
-    """
-    n_se, n_exceptions = counts.n_se.tolist(), counts.n_exceptions.tolist()
-    rates = [
-        exact / n if n else None for exact, n in zip(n_exceptions, n_se, strict=True)
-    ]
-    analyses = [
-        {
-            "analysis_id": analysis_id,
-            "n_se": int(n_se[i]),
-            "n_exceptions": int(n_exceptions[i]),
-            "n_imputed_se": int(counts.n_imputed_se[i]),
-            "n_imputed_exceptions": int(counts.n_imputed_exceptions[i]),
-            "exception_rate": rates[i],
-        }
-        for i, analysis_id in enumerate(analysis_ids)
-    ]
-    over = [
-        analysis_id
-        for analysis_id, rate in zip(analysis_ids, rates, strict=True)
-        if rate is not None and rate > SE_EXCEPTION_BUDGET
-    ]
-    return {"budget": SE_EXCEPTION_BUDGET, "analyses": analyses, "over_budget": over}
-
-
-def _report_se_exceptions(record: dict[str, Any]) -> None:
-    """The exception tally on the console, and each Analysis over budget by name."""
-    analyses = record["analyses"]
-    total = sum(entry["n_exceptions"] for entry in analyses)
-    imputed = sum(entry["n_imputed_exceptions"] for entry in analyses)
-    cells = sum(entry["n_se"] for entry in analyses)
-    print(
-        f"SE exceptions: {total:,} of {cells:,} SEs ({imputed:,} on imputed cells); "
-        f"{len(record['over_budget']):,} Analyses over the {record['budget']:.0%} budget"
-    )
-    over = [entry for entry in analyses if entry["analysis_id"] in set(record["over_budget"])]
-    if not over:
-        return
-    log.warning(
-        "complete-ragged: %s Analyses hold more than %s of their SEs as exact exceptions, "
-        "the residual budget (spec §6a); the source's SE model and range are kept, never "
-        "refitted or narrowed to float16 (issue #301): %s",
-        f"{len(over):,}",
-        f"{record['budget']:.0%}",
-        "; ".join(
-            f"{entry['analysis_id']}: {entry['exception_rate']:.2%} "
-            f"({entry['n_exceptions']:,} of {entry['n_se']:,}, "
-            f"{entry['n_imputed_exceptions']:,} imputed)"
-            for entry in over
-        ),
-    )
-
-
 def _write_completed_zarr(
     staged: StagedRelease,
     encode_plan: _EncodePlan,
@@ -1502,10 +1459,10 @@ def _write_completed_zarr(
     se_exceptions = (
         None
         if counts is None
-        else _se_exception_record(counts, [analysis.analysis_id for analysis in analyses])
+        else se_exception_record(counts, [analysis.analysis_id for analysis in analyses])
     )
     if se_exceptions is not None:
-        _report_se_exceptions(se_exceptions)
+        report_se_exceptions(se_exceptions, where="complete-ragged")
     print("Building variant-centric index...")
     build_variant_index(staged.path, n_axis=n_variants)
     return se_exceptions
@@ -1518,6 +1475,7 @@ def _write_top_hits_and_analyses(
     *,
     ancestry: str,
     left_out: LeftOut,
+    csr: _CompletedCsr,
     source_format_version: str,
 ) -> None:
     """Phase 5 metadata: top-hit indexes built with the completed encoding,
@@ -1537,7 +1495,12 @@ def _write_top_hits_and_analyses(
 
     print("Writing analyses.tsv...")
     with staged.index_connection() as quality_db:
-        quality_rollup = completion_quality_rollup(quality_db, state.n_analyses)
+        # The rows the release holds, not the blocks' sums: a row two blocks attempt
+        # is one row, and a fill they conflict on is none (#362).
+        quality_rollup = completion_quality_rollup(
+            quality_db, state.n_analyses,
+            imputed=csr.imputed_by_analysis, missing=csr.missing_by_analysis,
+        )
     dst_analyses = reset_top_hit_counts(left_out.recorded(
         [
             replace(
@@ -1582,7 +1545,7 @@ def _completed_manifest(
     staged: StagedRelease,
     source_format_version: str,
     release_id: str | None,
-    ld_panel_id: str,
+    panel: PanelIdentity,
     ancestry: str,
     min_cor: float,
     thresh: float,
@@ -1602,10 +1565,10 @@ def _completed_manifest(
         release_id=release_id,
         source_format_version=source_format_version,
         completion_provenance=build_completion_provenance(
-            ld_panel_id=ld_panel_id,
             ancestry=ancestry,
             min_cor=min_cor,
             thresh=thresh,
+            ld_panel=panel,
             n_variants_total=len(axis.variants),
             n_variants_new=len(axis.new_variants),
             cis_window_bp=cis_window_bp,
@@ -1655,11 +1618,7 @@ def _run_completion(
     *,
     ancestry: str,
     cis_window_bp: int,
-    min_cor: float,
-    thresh: float,
-    release_id: str | None,
-    ld_panel_id: str,
-    n_workers: int,
+    options: CompletionOptions,
     checkpoint_dir: Path,
     impute_analysis_ids: set[str] | None,
     region_cap_bp: int | None,
@@ -1668,6 +1627,7 @@ def _run_completion(
     """The shared core: block discovery, checkpointed LD-block completion and
     CSR assembly, encoding, metadata and manifest, sequenced inside the
     staging context that makes a completed release atomic."""
+    min_cor, thresh, n_workers = options.min_cor, options.thresh, options.n_workers
     manifest, source_format_version = _open_source(src)
 
     with OpenGWASDBStore.staging(dst, overwrite=True) as staged:
@@ -1690,12 +1650,14 @@ def _run_completion(
         )
         _write_top_hits_and_analyses(
             staged, state, encode_plan, ancestry=ancestry, left_out=csr.left_out,
+            csr=csr,
             source_format_version=source_format_version,
         )
         staged.write_manifest(
             _completed_manifest(
                 manifest, staged=staged, source_format_version=source_format_version,
-                release_id=release_id, ld_panel_id=ld_panel_id, ancestry=ancestry,
+                release_id=options.release_id, panel=checkpoint.checkpointed_panel(checkpoint_dir),
+                ancestry=ancestry,
                 min_cor=min_cor, thresh=thresh, cis_window_bp=cis_window_bp, axis=axis,
                 panel_placement=plan.panel_placement, csr=csr, encode_plan=encode_plan,
                 se_exceptions=se_exceptions,

@@ -30,6 +30,8 @@ VALUE_RULES = {
     "completion.imputed_present",
     "completion.off_panel",
     "completion.declaration",
+    "completion.imputed_total",
+    "completion.missing_total",
     "associations.eaf_range",
     "side_tables.z_overflow",
     "side_tables.eaf_exceptions",

@@ -130,7 +130,8 @@ OLD_CELL_CATEGORIES = (
 )
 #: What each completion panel is, keyed by the path its completion step was
 #: given: the step record names the panel only by path, and the manifest not at
-#: all (its `ld_panel_id` is a constant). A path not listed reads as itself.
+#: all (these Stores were completed before the manifest recorded the panel, and
+#: their `ld_panel_id` is the same name for both). A path not listed reads as itself.
 PANEL_NAMES = {
     "/data/opengwasdb/reference/ld": "UKB EUR LD panel (ukb-hg38-eur-ld)",
     "/data/opengwasdb/reference/hgdp1kgp-hg38/panel": "HGDP+1kGP hg38 EUR panel",
@@ -187,10 +188,10 @@ def _count(text: str) -> int:
 def panel_counts(stdout: str) -> dict[str, int]:
     """Blocks and variants from a completion step's `LD panel: ...` line.
 
-    The manifest cannot say which panel completed a Store: `ld_panel_id` is a
-    constant of the completion code, so both Stores record `eur-hg38-gpm`
-    although they were completed against different panels. The step record's
-    argv and stdout are the only provenance that distinguishes them.
+    These Stores' manifests cannot say which panel completed them: both were
+    completed before a completion recorded its panel (#327) and record
+    `eur-hg38-gpm`, although they were completed against different panels. The
+    step record's argv and stdout are the only provenance that distinguishes them.
     """
     line = next(row for row in stdout.splitlines() if row.startswith("LD panel: "))
     blocks, variants = line.removeprefix("LD panel: ").split(", ")

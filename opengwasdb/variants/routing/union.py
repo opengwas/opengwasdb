@@ -28,6 +28,8 @@ from opengwasdb.build.ordered_pool import fork_pool
 from opengwasdb.encoding.timing import format_duration
 from opengwasdb.readers.interface import SourceReader, SourceVariant
 from opengwasdb.readers.registry import SourceSpec, open_source
+from opengwasdb.variants.assembly_gaps import grch38
+from opengwasdb.variants.routing.names import SiteNames
 from opengwasdb.variants.windows import (
     DEFAULT_MAP_SPILL_RECORDS,
     DEFAULT_REDUCTION_BATCH_SIZE,
@@ -678,7 +680,7 @@ def _map_reduce_windows(run: _MapRun, workers: int) -> dict[tuple[str, WindowKey
 
 def materialize_site_union(
     window_shards: WindowShards,
-) -> tuple[dict[str, set[tuple[str, int, str, str]]], dict[tuple[str, int, str, str], str]]:
+) -> tuple[dict[str, set[tuple[str, int, str, str]]], SiteNames]:
     """Read the final per-window shards into the in-memory site union.
 
     ``rsid_by_site`` is inserted in ``(rank, site)`` order (issue #192): the
@@ -688,19 +690,59 @@ def materialize_site_union(
     deterministic.
     """
     tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]] = {}
-    rsid_by_site: dict[tuple[str, int, str, str], str] = {}
-    ranked: list[tuple[tuple[int, int], tuple[str, int, str, str], str]] = []
+    ranked: list[tuple[tuple[int, int], tuple[str, int, str, str], str, str]] = []
     for key in sorted(window_shards.shards):
         spec = window_shards.shards[key]
         sites = tuples_by_assembly.setdefault(key[0], set())
         for site, rsid in iter_shard(spec.path):
             sites.add(site)
             if rsid:
-                ranked.append((spec.rank, site, rsid))
+                ranked.append((spec.rank, site, rsid, key[0]))
     ranked.sort()
-    for _rank, site, rsid in ranked:
+    outside = _off_sequence(tuples_by_assembly.get("hg38", set()))
+    if outside:
+        tuples_by_assembly["hg38"] -= outside
+    return tuples_by_assembly, _site_names(ranked, tuples_by_assembly, outside)
+
+
+def _site_names(
+    ranked: list[tuple[tuple[int, int], tuple[str, int, str, str], str, str]],
+    tuples_by_assembly: dict[str, set[tuple[str, int, str, str]]],
+    outside: set[tuple[str, int, str, str]],
+) -> SiteNames:
+    """Each site's first rsid in ``ranked`` order, and the hg19 name of each site both
+    assemblies declare (#325); a GRCh38 site ``outside`` the sequence names nothing
+    (#410)."""
+    rsid_by_site: dict[tuple[str, int, str, str], str] = {}
+    hg19_names: dict[tuple[str, int, str, str], str] = {}
+    shared = tuples_by_assembly.get("hg19", set()) & tuples_by_assembly.get("hg38", set())
+    for _rank, site, rsid, assembly in ranked:
+        if assembly == "hg38" and site in outside:
+            continue
         rsid_by_site.setdefault(site, rsid)
-    return tuples_by_assembly, rsid_by_site
+        if site in shared and assembly == "hg19":
+            hg19_names.setdefault(site, rsid)
+    for site in shared:
+        hg19_names.setdefault(site, "")
+    return SiteNames(rsid_by_site, hg19_names)
+
+
+def _off_sequence(sites: set[tuple[str, int, str, str]]) -> set[tuple[str, int, str, str]]:
+    """The GRCh38 ``sites`` GRCh38 has no sequence at: one in an assembly gap or past its
+    contig's end names no variant, and Admission drops its rows (#410), so the union
+    gives it no place on an axis."""
+    if not sites:
+        return set()
+    ordered = list(sites)
+    found = grch38().reasons_at((site[0] for site in ordered), (site[1] for site in ordered))
+    outside = {site for site, reason in zip(ordered, found, strict=True) if reason}
+    if outside:
+        log.warning(
+            "%d GRCh38 site(s) lie in an assembly gap or past their contig's end, where "
+            "GRCh38 has no sequence -- no axis holds them, and their rows are dropped "
+            "(first: %s)", len(outside), ":".join(map(str, min(outside))),
+        )
+    return outside
 
 
 @contextmanager

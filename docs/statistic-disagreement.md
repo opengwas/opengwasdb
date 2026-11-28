@@ -65,7 +65,7 @@ the gap is closed.
 
 | Circumstance | Today | Pinned by |
 |---|---|---|
-| The source has no p-value: GWAS-VCF, BESD, or a Column Map without `p_value` | skipped, `no_source_p_value`; nothing is compared | `test_a_source_with_no_p_value_column_is_skipped_with_a_reason` |
+| The source has no p-value: BESD, an association TSV, a GWAS-VCF without `FORMAT/LP`, or a Column Map without `p_value` (a GWAS-VCF's `LP` is read since #510) | skipped, `no_source_p_value`; nothing is compared | `test_a_source_with_no_p_value_column_is_skipped_with_a_reason` |
 | Every SE was derived from the p-value (ADR 0055) | skipped, `all_se_from_p_value`. Such rows are never compared, because they would agree by construction | `test_a_source_whose_every_se_comes_from_its_p_value_is_skipped` |
 
 ## Not yet explained

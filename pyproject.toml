@@ -177,6 +177,7 @@ markers = [
   "ld: an opengwasdb.ld test; added to every test under tests/ld/, so `-m ld` and `-m \"not ld\"` select the area",
   "acceptance: an opengwasdb.ld acceptance run on a whole panel, slower than the realdata tier; run by `pixi run -e dev ld-acceptance-clump`, `ld-acceptance-stores` and `ld-acceptance-genotypes`",
   "realdata: reads the HGDP+1kGP panels under /data/opengwasdb/reference/; IEU nodes only, run by `pixi run -e dev ld-test-realdata`",
+  "assembly_gaps: reads the committed GRCh38 gap table; every other test reads one with no gaps (tests/conftest.py, #410)",
 ]
 
 [tool.ruff]

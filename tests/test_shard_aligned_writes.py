@@ -34,6 +34,8 @@ import pytest
 import zarr
 from reader_constants import set_reader_constant
 
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.encoding.se import _row_block_of
 from opengwasdb.layouts.dense.build_vcf import _eaf_row_band, _flush_band, _shard_columns
@@ -277,7 +279,8 @@ def test_a_dense_completion_writes_whole_shards(
     completed = tmp_path / "comp.opengwasdb"
     with require_whole_shard_writes():
         complete_dense_store(
-            observed, completed, tdc._make_ld_panel(tmp_path), ancestry="EUR", min_cor=0.0
+            observed, completed, PanelSource(tdc._make_ld_panel(tmp_path), ancestry="EUR"),
+            CompletionOptions(min_cor=0.0),
         )
     root = open_group(completed / "data.zarr", "r")
     assert tuple(int(size) for size in root["z"].chunks) == (2, 1)
@@ -325,7 +328,7 @@ def test_a_hybrid_completion_patches_whole_shards(
     ld = thc._make_ld_panel_with_crossover(tmp_path)
     dst = tmp_path / "dst.opengwasdb"
     with require_whole_shard_writes():
-        complete_hybrid_store(src, dst, ld, min_cor=0.0, thresh=0.9)
+        complete_hybrid_store(src, dst, PanelSource(ld), CompletionOptions(min_cor=0.0, thresh=0.9))
 
     assert bands, "the crossover fold patched no cells"
     # Before the rewrite each patched cell was its own `vindex` shard

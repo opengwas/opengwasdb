@@ -117,6 +117,31 @@ def test_a_subset_cell_a_later_worker_reads_is_still_found(
     assert report == serial
 
 
+def test_a_hybrid_analysis_summed_over_its_components_reports_the_same_at_several_workers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`associations.z_plausible` sums a Hybrid Analysis's counts over its Dense
+    Component and Overflow (#510). The Dense grid's bands are read across workers and
+    added in band order before the sum, so the one finding, 999 Dense rows all at 5e-8
+    beside an Overflow at 20%, is the one a single process reports."""
+    from test_z_plausibility import _ON_PANEL, _SPLIT, _SPLIT_CLEAN, _hybrid_store
+
+    from opengwasdb.validation.rules import z_plausibility as zp
+
+    store = _hybrid_store(tmp_path, split=_SPLIT, clean=_SPLIT_CLEAN)
+    _narrow(monkeypatch, store, _ON_PANEL // MIN_BANDS)
+    bands = _bands(store)
+    assert bands and min(bands) >= MIN_BANDS, f"the grid must span {MIN_BANDS} bands: {bands}"
+
+    serial = _report(store, 1)
+    spread = _report(store, WORKERS)
+
+    assert _failed(spread) == {zp.RULE}
+    assert spread == serial
+    [message] = [message for rule, _, _, message, _ in spread if rule == zp.RULE]
+    assert "'split': 52.0% of 2,499 observed associations at 5e-8" in message
+
+
 def test_the_run_s_digest_key_is_the_workers_key(
     tmp_path: Path, completed_seed: Path, monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,

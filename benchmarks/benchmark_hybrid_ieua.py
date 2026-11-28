@@ -36,7 +36,8 @@ from pathlib import Path
 import numpy as np
 from scipy.special import erfc
 
-from opengwasdb.completion.ld_panel import list_all_blocks, list_chromosomes
+from opengwasdb.completion.ld_panel import PanelSource, list_all_blocks, list_chromosomes
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.layouts.dense.build_vcf import build_dense_from_vcf_manifest
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
@@ -271,12 +272,16 @@ def _build_all(
         )
     if not stores["dense_completed"].exists():
         print("Completing Dense-of-union store...", flush=True)
-        complete_dense_store(stores["dense_obs"], stores["dense_completed"], ld_dir,
-                             n_workers=n_workers, overwrite=True)
+        complete_dense_store(
+            stores["dense_obs"], stores["dense_completed"], PanelSource(ld_dir),
+            CompletionOptions(n_workers=n_workers, overwrite=True),
+        )
     if not stores["hybrid_completed"].exists():
         print("Completing Hybrid store...", flush=True)
-        complete_hybrid_store(stores["hybrid_obs"], stores["hybrid_completed"], ld_dir,
-                              n_workers=n_workers, overwrite=True)
+        complete_hybrid_store(
+            stores["hybrid_obs"], stores["hybrid_completed"], PanelSource(ld_dir),
+            CompletionOptions(n_workers=n_workers, overwrite=True),
+        )
     return stores
 
 

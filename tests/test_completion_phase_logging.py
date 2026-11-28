@@ -19,6 +19,8 @@ from test_dense_completion import SOURCE_HEADER, SOURCE_ROWS, _make_ld_panel
 from test_hybrid_completion import _build_source as build_hybrid_source
 from test_hybrid_completion import _make_ld_panel as make_hybrid_panel
 
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.completion.parallel import run_block_tasks
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
@@ -74,8 +76,8 @@ def test_complete_dense_logs_each_phase_progress_and_a_report(
     observed, panel = dense_inputs
     with caplog.at_level(logging.INFO):
         complete_dense_store(
-            observed, tmp_path / "comp.opengwasdb", panel,
-            ancestry="EUR", min_cor=0.0, release_id="comp-v1",
+            observed, tmp_path / "comp.opengwasdb", PanelSource(panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0, release_id="comp-v1"),
         )
     messages = _messages(caplog)
     _assert_every_phase_started_and_finished(messages)
@@ -91,7 +93,8 @@ def test_complete_hybrid_logs_the_dense_components_phases(
     src = build_hybrid_source(tmp_path)
     with caplog.at_level(logging.INFO):
         complete_hybrid_store(
-            src, tmp_path / "dst.opengwasdb", make_hybrid_panel(tmp_path), min_cor=0.0, thresh=0.9
+            src, tmp_path / "dst.opengwasdb", PanelSource(make_hybrid_panel(tmp_path)),
+            CompletionOptions(min_cor=0.0, thresh=0.9),
         )
     messages = _messages(caplog)
     _assert_every_phase_started_and_finished(messages)

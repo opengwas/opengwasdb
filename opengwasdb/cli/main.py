@@ -52,6 +52,8 @@ from opengwasdb.variants.windows import (
 from opengwasdb.version import __version__
 
 if TYPE_CHECKING:
+    from opengwasdb.completion.ld_panel import PanelSource
+    from opengwasdb.completion.options import CompletionOptions
     from opengwasdb.layouts.hybrid.build import HybridBuildResult
     from opengwasdb.variants.routing import UnionOptions, VariantReferenceExtraction
 
@@ -104,10 +106,11 @@ _RESUME_HELP = (
 )
 _ON_RSID_CONFLICT_HELP = (
     "What to do when sources that spell one variant's alleles in different case name "
-    "it with different rsids, as the rsid harvest of a --reference-panel build or of a "
-    "--variant-reference that names no rsids finds (#306, #379): refuse fails the "
-    "build, naming the variant; drop stores it with no rsid, even where its other "
-    "allele order names it, so it is found by ALID and position but by no name. The "
+    "it with different rsids, as the rsid harvest of a --reference-panel or a "
+    "--variant-reference build finds (#306, #379, #258): refuse fails the "
+    "build, naming the variant, even one the reference names; drop stores it with no "
+    "rsid, even where its other allele order names it, so it is found by ALID and "
+    "position but by no name, unless the reference names it, which keeps that name. The "
     "counts of such keys and variants, and the first 20 keys, are always printed "
     "under rsid_conflicts."
 )
@@ -147,16 +150,25 @@ _SOURCE_ASSEMBLY_HELP = (
     "(hg19/GRCh37 or hg38/GRCh38, default: hg19)"
 )
 _VARIANT_REFERENCE_HELP = (
-    "Build against a precomputed variant axis instead of running Pass 1: a "
+    "Build against a precomputed variant axis instead of Pass 1's union: a "
     "*.variant-ref.tsv.gz artifact, a plain ALID list, or a store variants.tsv.gz. "
     "Source variants absent from the reference are dropped; reference variants "
-    "no study observes are stored as NaN. A reference that names no rsids runs "
-    "Pass 1's rsid harvest and rekeys it through this build's routing, so those "
-    "names are identical to the two-pass build's for every variant both axes "
-    "carry, and the build fails rather than publish an rsid the sources did not "
-    "name for its variant. A reference that already names rsids is used as given: "
-    "a variant it does not name is stored with no rsid even when a source names "
-    "it, and the build warns with counts. The axes are not identical: a named "
+    "no study observes are stored as NaN. A plain list or a store table names no "
+    "source coordinates, so it routes a GRCh38 source by identity; with an hg19 "
+    "source in the manifest, Pass 1 lifts every source site as the two-pass build "
+    "does, with its chain and liftover failure threshold, and the reference stays "
+    "the axis: a Hybrid build is then the --reference-panel build with that list. "
+    "Pass 1 still reads every source for its rsids, lifting hg19 sources under the "
+    "liftover failure threshold, which can refuse the build (about 30% of an "
+    "OGS-00004-scale build), and rekeys "
+    "them through this build's routing, so the names are the two-pass build's for "
+    "every variant both axes carry, and the build fails rather than publish an rsid "
+    "the sources did not name for its variant. Where the reference names a variant, "
+    "its own name wins, and the variants it names differently from its sources are "
+    "counted in a warning; every variant it leaves unnamed, Overflow rows included, "
+    "takes the sources' name (#258), and a dispute among the sources refuses under "
+    "--on-rsid-conflict refuse even where the reference names the variant. The "
+    "axes are not identical: a named "
     "off-reference source variant with no usable association is absent here and "
     "kept by a two-pass reference-panel build."
 )
@@ -730,6 +742,10 @@ _BUILD_RAGGED_REGIONS_HELP = (
     "regions complete-ragged fills; a Store whose coverage is not cis is not completed "
     "without it"
 )
+_BUILD_SSF_WORKERS_HELP = (
+    "Sources the effect-consistency check reads at once, before the ingest (#510); "
+    "the ingest reads one Analysis at a time"
+)
 
 
 @app.command("check-observed-view")
@@ -976,8 +992,9 @@ def build_dense_vcf_command(
     stored_effect_scale (issue #17), original_sd_method, and original_sd (issue #18).
     VCF files are hg19 by default; liftover to hg38 is applied inline.
     --source-reader-capability and --source-assembly supply per-release defaults (#174).
-    --variant-reference supplies a precomputed axis, bypassing Pass 1 (#185);
-    a reference that names no rsids runs Pass 1's harvest for them (#255).
+    --variant-reference supplies a precomputed axis, bypassing Pass 1's union (#185);
+    Pass 1 still harvests rsids, filling every variant the reference leaves
+    unnamed, the reference's own names winning (#255, #258).
     --column-map reads opengwasdb.column-map rows through a Column Map (#281).
     --association-coverage states what the release retains: a Dense release can
     carry only `gwas`, its default (issue #298). --admission-record names where
@@ -1032,9 +1049,9 @@ def build_hybrid_command(
     stored_effect_scale (issue #17), original_sd_method, and original_sd (issue #18).
     On-panel variants fill the Dense Component; off-panel variants go to Ragged
     Overflow. --variant-reference supplies a precomputed axis and source map,
-    bypassing Pass 1 (#186); a reference that names no rsids runs Pass 1's
-    harvest, keeping the names the two-pass build gives every variant both axes
-    carry (#255). --source-reader-capability and --source-assembly supply
+    bypassing Pass 1's union (#186); Pass 1's harvest still runs, keeping the
+    names the two-pass build gives every variant both axes carry (#255), save
+    where the reference names a variant itself, whose name wins (#258). --source-reader-capability and --source-assembly supply
     per-release defaults (#174). --checkpoint keeps a resumable record of each
     phase (#227), and --resume continues the build for OUTPUT_PATH from one.
     --column-map reads opengwasdb.column-map rows through a Column Map (#281).
@@ -1599,12 +1616,58 @@ _RAGGED_WORKERS_HELP = (
 )
 
 
+#: The LD-panel options `complete-hybrid`, `complete-ragged` and `complete-dense` share.
+#: The root is a ``str``: what the caller typed is what the completion records (``./panel/``
+#: stays ``./panel/``), where a ``Path`` would have normalised it.
+LdPanelRoot = Annotated[
+    str, typer.Option(help="Root of LD panel (ld_dir/{ancestry}/{chr}/...)")
+]
+LdPanelAncestry = Annotated[str, typer.Option()]
+LdPanelName = Annotated[
+    str | None,
+    typer.Option(
+        help="A name for the LD panel, recorded beside its content digest; "
+        "unset records the digest-derived id",
+    ),
+]
+
+
+def _panel_source(ld_panel: str, ancestry: str, ld_panel_id: str | None) -> "PanelSource":
+    """The LD panel a completion command was asked for. Imported here: reading the panel's
+    module loads pysam and scipy, which no query command may."""
+    from opengwasdb.completion.ld_panel import PanelSource
+
+    try:
+        return PanelSource(ld_panel, ancestry, ld_panel_id)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="--ld-panel-id") from exc
+
+
+def _completion_options(
+    min_cor: float, release_id: str | None, n_workers: int, overwrite: bool
+) -> "CompletionOptions":
+    """The tuning a completion command was given; ``thresh`` stays the completion's own
+    unless the command has the option (see `_with_thresh`)."""
+    from opengwasdb.completion.options import CompletionOptions
+
+    return CompletionOptions(
+        min_cor=min_cor, release_id=release_id or None, n_workers=n_workers, overwrite=overwrite
+    )
+
+
+def _with_thresh(options: "CompletionOptions", thresh: float) -> "CompletionOptions":
+    from dataclasses import replace
+
+    return replace(options, thresh=thresh)
+
+
 @app.command("complete-hybrid")
 def complete_hybrid_command(
     source_path: Path,
     dest_path: Path,
-    ld_panel: Path = typer.Option(..., help="Root of LD panel (ld_dir/{ancestry}/{chr}/...)"),
-    ancestry: str = typer.Option("EUR"),
+    ld_panel: LdPanelRoot,
+    ancestry: LdPanelAncestry = "EUR",
+    ld_panel_id: LdPanelName = None,
     min_cor: float = typer.Option(0.7),
     thresh: float = typer.Option(0.9),
     release_id: str = typer.Option(None),
@@ -1620,13 +1683,8 @@ def complete_hybrid_command(
     result = complete_hybrid_store(
         source_path,
         dest_path,
-        ld_panel,
-        ancestry=ancestry,
-        min_cor=min_cor,
-        thresh=thresh,
-        release_id=release_id or None,
-        n_workers=n_workers,
-        overwrite=overwrite,
+        _panel_source(ld_panel, ancestry, ld_panel_id),
+        _with_thresh(_completion_options(min_cor, release_id, n_workers, overwrite), thresh),
     )
     elapsed = time.time() - t0
     typer.echo(
@@ -1719,6 +1777,7 @@ def build_ragged_ssf_command(
     chain_file: _CHAIN_FILE_OPTION = None,
     liftover_failure_threshold: _LIFTOVER_FAILURE_THRESHOLD_OPTION = 0.01,
     regions: Annotated[Path | None, typer.Option(help=_BUILD_RAGGED_REGIONS_HELP)] = None,
+    n_workers: int = typer.Option(1, help=_BUILD_SSF_WORKERS_HELP),
 ) -> None:
     """Build a Ragged Observed-Only store from filtered GWAS-SSF files.
 
@@ -1748,20 +1807,13 @@ def build_ragged_ssf_command(
     """
     from opengwasdb.layouts.ragged.build_ssf import build_ragged_from_ssf
     result = build_ragged_from_ssf(
-        manifest_path,
-        filtered_dir,
-        output_path,
-        store_id=store_id,
-        release_id=release_id,
-        association_coverage=association_coverage,
-        overwrite=overwrite,
-        eaf_reference=eaf_reference,
-        eaf_reference_ancestry=eaf_reference_ancestry,
-        allow_unverified_eaf=allow_unverified_eaf,
-        admission_record=admission_record,
-        chain_file=chain_file,
-        liftover_failure_threshold=liftover_failure_threshold,
-        regions=regions,
+        manifest_path, filtered_dir, output_path,
+        store_id=store_id, release_id=release_id, association_coverage=association_coverage,
+        overwrite=overwrite, eaf_reference=eaf_reference,
+        eaf_reference_ancestry=eaf_reference_ancestry, allow_unverified_eaf=allow_unverified_eaf,
+        admission_record=admission_record, chain_file=chain_file,
+        liftover_failure_threshold=liftover_failure_threshold, regions=regions,
+        n_workers=n_workers,
     )
     _echo_ragged_summary(result)
 
@@ -1770,8 +1822,9 @@ def build_ragged_ssf_command(
 def complete_ragged_command(
     source_path: Path,
     dest_path: Path,
-    ld_panel: Path = typer.Option(..., help="Root of LD panel (ld_dir/{ancestry}/{chr}/...)"),
-    ancestry: str = typer.Option("EUR"),
+    ld_panel: LdPanelRoot,
+    ancestry: LdPanelAncestry = "EUR",
+    ld_panel_id: LdPanelName = None,
     cis_window_bp: int = typer.Option(1_000_000),
     min_cor: float = typer.Option(0.7),
     release_id: str = typer.Option(None),
@@ -1795,13 +1848,9 @@ def complete_ragged_command(
     result = complete_ragged_store(
         source_path,
         dest_path,
-        ld_panel,
-        ancestry=ancestry,
+        _panel_source(ld_panel, ancestry, ld_panel_id),
+        _completion_options(min_cor, release_id, n_workers, overwrite),
         cis_window_bp=cis_window_bp,
-        min_cor=min_cor,
-        release_id=release_id or None,
-        n_workers=n_workers,
-        overwrite=overwrite,
     )
     _echo_summary(
         {
@@ -1844,11 +1893,12 @@ def _echo_dense_completion_result(result: Any, elapsed: float) -> None:
 def complete_dense_command(
     source_path: Path,
     dest_path: Path,
-    ld_panel: Path = typer.Option(..., help="Root of LD panel (ld_dir/{ancestry}/{chr}/...)"),
-    ancestry: str = typer.Option("EUR"),
+    ld_panel: LdPanelRoot,
+    ancestry: LdPanelAncestry = "EUR",
     min_cor: float = typer.Option(0.7),
     thresh: float = typer.Option(0.9),
     release_id: str = typer.Option(None),
+    ld_panel_id: LdPanelName = None,
     n_workers: int = typer.Option(1, help=_DENSE_WORKERS_HELP),
     overwrite: bool = typer.Option(False),
 ) -> None:
@@ -1861,13 +1911,8 @@ def complete_dense_command(
     result = complete_dense_store(
         source_path,
         dest_path,
-        ld_panel,
-        ancestry=ancestry,
-        min_cor=min_cor,
-        thresh=thresh,
-        release_id=release_id or None,
-        n_workers=n_workers,
-        overwrite=overwrite,
+        _panel_source(ld_panel, ancestry, ld_panel_id),
+        _with_thresh(_completion_options(min_cor, release_id, n_workers, overwrite), thresh),
     )
     elapsed = time.time() - t0
     _echo_dense_completion_result(result, elapsed)

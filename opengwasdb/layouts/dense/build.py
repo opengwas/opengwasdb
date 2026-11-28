@@ -10,6 +10,11 @@ import numpy as np
 
 from opengwasdb import admission
 from opengwasdb.admission.rules import AnalysisRules
+from opengwasdb.build.effect_consistency import (
+    ConsistencySkip,
+    apply_consistency_evidence,
+    skipped_effect_consistency,
+)
 from opengwasdb.encoding import (
     association_codec,
     eaf_baseline_from_grid,
@@ -58,6 +63,7 @@ from opengwasdb.variants import (
     chromosome_sort_key,
     write_variant_axis,
 )
+from opengwasdb.variants.assembly_gaps import site_arrays
 from opengwasdb.variants.routing import SourceKey, collapse_duplicates, union_names
 from opengwasdb.variants.rsid import RsidConflictPolicy
 
@@ -155,7 +161,7 @@ def build_dense_observed_store(
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
         directory = admission.admission_record_for(out, admission_record)
-        records, rsid_by_alid = _admitted_records(sources, directory)
+        records, rsid_by_alid = _admitted_records(sources, directory, reference_assembly)
         variants = _collect_variants(records)
         analyses = _collect_analyses(records, sources)
         z, se, eaf, left_out = _stored_grid(records, variants, analyses, sources)
@@ -258,7 +264,7 @@ def _records_of(source: AnalysisSource) -> list[NormalisedAssociation]:
 
 
 def _admitted_records(
-    sources: Sequence[AnalysisSource], directory: Path
+    sources: Sequence[AnalysisSource], directory: Path, reference_assembly: str
 ) -> tuple[list[NormalisedAssociation], dict[str, str]]:
     """The records each Analysis's Admission gate keeps, in source order, as
     their sources give them, and the names those records give their variants
@@ -267,9 +273,11 @@ def _admitted_records(
 
     Analyses are judged in the order of ``sources``, which is the order the
     Store's columns take (`_collect_analyses`), each under the filters its
-    manifest row declares (D2). An Analysis's records for one variant resolve as
-    routing resolves an axis's (`collapse_duplicates`): agreeing ones collapse
-    to the first, conflicting ones are all dropped and logged.
+    manifest row declares (D2), and by position on ``reference_assembly``: this
+    builder does not lift, so every record is at its release position (#410). An
+    Analysis's records for one variant resolve as routing resolves an axis's
+    (`collapse_duplicates`): agreeing ones collapse to the first, conflicting ones
+    are all dropped and logged.
     """
     records, positions = _gathered(sources)
     record_ = admission.AdmissionRecord.open(
@@ -277,7 +285,7 @@ def _admitted_records(
     )
     keep = np.zeros(len(records), dtype=bool)
     for source, at in zip(sources, positions, strict=True):
-        with record_.gate(source.rules) as gate:
+        with record_.gate(source.rules.judging_positions_on(reference_assembly)) as gate:
             gate.streamed(source.tally)
             if at:
                 keep[at] = _admitted(records, at, gate)
@@ -374,7 +382,16 @@ def _source_rows(records: list[NormalisedAssociation]) -> admission.SourceRows:
         se=np.array([r.se for r in records], dtype=np.float64),
         z=np.array([r.z for r in records], dtype=np.float64),
         keys_at=lambda at: [alids[i] for i in at.tolist()],
+        **_sites(records),
     )
+
+
+def _sites(records: list[NormalisedAssociation]) -> dict[str, np.ndarray]:
+    """Each record's chromosome and position, which its gate places it by (#410)."""
+    chromosome, position = site_arrays(
+        (r.variant.chromosome for r in records), (r.variant.position for r in records)
+    )
+    return {"chromosome": chromosome, "position": position}
 
 
 def _scatter_records(
@@ -473,7 +490,9 @@ def _collect_analyses(
     records: list[NormalisedAssociation], sources: Sequence[AnalysisSource]
 ) -> list[Analysis]:
     """The Analyses with a kept record, in ``sources`` order, each with the
-    frequency scope of its records."""
+    frequency scope of its records. The association TSV format has no p-value
+    column, so the effect-consistency check (#510, ADR 0069) records each as
+    `skipped: no_source_p_value`, never a blank."""
     with_eaf = {record.analysis_id for record in records if record.eaf is not None}
     kept = {record.analysis_id for record in records}
     analyses = []
@@ -484,7 +503,12 @@ def _collect_analyses(
             analyses.append(
                 replace(source.analysis, eaf_scope=eaf_scope, eaf_orientation=eaf_orientation)
             )
-    return analyses
+    return apply_consistency_evidence(
+        analyses,
+        skipped_effect_consistency(
+            (a.analysis_id for a in analyses), ConsistencySkip.NO_SOURCE_P_VALUE
+        ),
+    )
 
 
 def _write_manifest(

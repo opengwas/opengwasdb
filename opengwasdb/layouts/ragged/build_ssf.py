@@ -30,11 +30,17 @@ from opengwasdb import admission
 from opengwasdb.admission.declared import declared_rules
 from opengwasdb.build.eaf_orientation import (
     EafOrientationReport,
-    apply_orientation_evidence,
     check_eaf_orientation,
     enforce_eaf_orientation,
     load_eaf_reference,
     select_sites,
+)
+from opengwasdb.build.effect_consistency import (
+    ConsistencySource,
+    EffectConsistencyReport,
+    apply_build_evidence,
+    declared_p_value_tests,
+    verify_effect_consistency,
 )
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.build_manifest import check_ragged_sd_scale, original_sd_divisor
@@ -276,22 +282,27 @@ def _admitted_batches(a: AnalyteInput, gate: admission.Gate) -> list[ReaderBatch
     tally = StreamTally()
     batches = list(reader.stream_batches(tally))
     gate.streamed(tally)
-    declared = declaration is not None
-    return [
-        batch.take(
-            gate.source_rows(
-                admission.SourceRows(
-                    eaf=batch.eaf,
-                    imputation_score=batch.imputation_score if declared else None,
-                    imputation_status=batch.imputation_status if declared else None,
-                    se=batch.se,
-                    z=batch.z,
-                    keys_at=batch.keys_at,
-                )
+    return [_kept(batch, gate, declared=declaration is not None) for batch in batches]
+
+
+def _kept(batch: ReaderBatch, gate: admission.Gate, *, declared: bool) -> ReaderBatch:
+    """One batch's rows its gate keeps: judged by position too where the Analysis's
+    rules place rows (`AnalysisRules.sequence`, #410)."""
+    chromosome, position = batch.sites() if gate.rules.sequence is not None else (None, None)
+    return batch.take(
+        gate.source_rows(
+            admission.SourceRows(
+                eaf=batch.eaf,
+                imputation_score=batch.imputation_score if declared else None,
+                imputation_status=batch.imputation_status if declared else None,
+                se=batch.se,
+                z=batch.z,
+                keys_at=batch.keys_at,
+                chromosome=chromosome,
+                position=position,
             )
         )
-        for batch in batches
-    ]
+    )
 
 
 def _dedupe_per_analysis(
@@ -370,6 +381,7 @@ def build_ragged_from_ssf(
     chain_file: str | Path | None = None,
     liftover_failure_threshold: float = 0.01,
     regions: str | Path | None = None,
+    n_workers: int = 1,
 ) -> RaggedBuildResult:
     """Build a Ragged Observed-Only Store from filtered GWAS-SSF inputs.
 
@@ -388,15 +400,14 @@ def build_ragged_from_ssf(
     rows until the lift has placed them; a GRCh38-only build reads one Analysis
     at a time. ``regions``, the bundle's region table, is refused whole before
     anything is built and written into the Store as `regions.tsv` (issue #430).
+    ``n_workers``: sources the effect-consistency check reads at once (#510).
     """
     coverage = coverage_for_layout(association_coverage, PrimaryStorageLayout.RAGGED)
     table = None if regions is None else read_region_table(regions, RAGGED_REFERENCE_ASSEMBLY)
     out = Path(output_path)
     with OpenGWASDBStore.staging(out, overwrite=overwrite) as staged:
         return _build_ssf_release(
-            staged,
-            out,
-            (manifest_path, filtered_dir),
+            staged, out, (manifest_path, filtered_dir),
             _SsfBuildRequest(
                 store_id=store_id,
                 release_id=release_id,
@@ -409,6 +420,7 @@ def build_ragged_from_ssf(
                     None if chain_file is None else Path(chain_file), liftover_failure_threshold
                 ),
                 regions=table,
+                n_workers=n_workers,
             ),
         )
 
@@ -427,6 +439,8 @@ class _SsfBuildRequest:
     lift: LiftOptions
     #: The Release Bundle's region table, written into the Store as `regions.tsv`.
     regions: RegionTable | None = None
+    #: Sources the effect-consistency check reads at once (#510).
+    n_workers: int = 1
 
 
 def _build_ssf_release(
@@ -442,7 +456,9 @@ def _build_ssf_release(
     passed over.
     """
     manifest_path, filtered_dir = sources
-    analytes, ingested = _read_sources(manifest_path, filtered_dir, request)
+    analytes = _read_build_manifest(manifest_path, filtered_dir, request)
+    consistency = _verify_effect_consistency(manifest_path, analytes, request.n_workers)
+    analytes, ingested = _read_sources(manifest_path, analytes, request)
     eaf_report = _verify_eaf_orientation(
         analytes, ingested.per_analysis, ingested.alid_variant,
         eaf_reference=request.eaf_reference,
@@ -458,7 +474,7 @@ def _build_ssf_release(
     )
     _write_indexes_and_metadata(
         staged, analytes, eaf_scopes, encoding=encoding, eaf_report=eaf_report,
-        csr=csr,
+        consistency=consistency, csr=csr,
     )
     regions = None
     if request.regions is not None:
@@ -487,15 +503,23 @@ def _build_ssf_release(
     )
 
 
-def _read_sources(
+def _read_build_manifest(
     manifest_path: str | Path, filtered_dir: str | Path, request: _SsfBuildRequest
-) -> tuple[list[AnalyteInput], _Ingested]:
-    """Phase 1: the manifest, the lift refused if it cannot be done, and every source read."""
+) -> list[AnalyteInput]:
+    """Phase 1: the manifest, refused if its lift cannot be done or its region table
+    names another Analysis, before a source is read."""
     analytes = _read_manifest(manifest_path, filtered_dir)
     require_liftable([(a.analysis_id, a.source_build) for a in analytes], request.lift.chain_file)
     if request.regions is not None:
         check_region_table(request.regions, (a.analysis_id for a in analytes))
     print(f"Manifest: {len(analytes)} analyses")
+    return analytes
+
+
+def _read_sources(
+    manifest_path: str | Path, analytes: list[AnalyteInput], request: _SsfBuildRequest
+) -> tuple[list[AnalyteInput], _Ingested]:
+    """Phase 3: every source read through Association Admission, after the check."""
     record = admission.AdmissionRecord.open(
         request.admission_record,
         [a.analysis_id for a in analytes],
@@ -609,7 +633,7 @@ def _ingest_ssf_sources(
     per_analysis: list[list[_Assoc]] = []
     harvest = _Harvest()
     for a in analytes:
-        with record.gate(rules[a.analysis_id]) as gate:
+        with record.gate(rules[a.analysis_id].judging_positions_on(a.source_build)) as gate:
             batches = _admitted_batches(a, gate)
             for batch in batches:
                 harvest.add(batch)
@@ -638,7 +662,10 @@ def _ingest_lifted(
     variant's rsid is the one it would have had were every source on GRCh38.
     """
     with ExitStack() as stack:
-        gates = [stack.enter_context(record.gate(rules[a.analysis_id])) for a in analytes]
+        gates = [
+            stack.enter_context(record.gate(rules[a.analysis_id].judging_positions_on(a.source_build)))
+            for a in analytes
+        ]
         held = [_admitted_batches(a, g) for a, g in zip(analytes, gates, strict=True)]
         lifted = [a.source_build != STORE_BUILD for a in analytes]
         placement = place_held_sources(list(zip(lifted, held, strict=True)), options)
@@ -652,6 +679,7 @@ def _ingest_lifted(
             per_analysis.append(recs)
             _print_ingest_summary(a, recs, n_consistent, n_conflicting)
     summary = record.finish()
+    record.write_lift_collisions(placement.collisions.sources)
     if not harvest.alid_variant:
         raise ValueError(_nothing_placed(summary))
     return _Ingested(
@@ -666,6 +694,9 @@ def _nothing_placed(summary: admission.AdmissionSummary) -> str:
         admission.Reason.LIFT_UNMAPPED,
         admission.Reason.LIFT_AMBIGUOUS,
         admission.Reason.LIFT_OFF_PRIMARY,
+        admission.Reason.IN_ASSEMBLY_GAP,
+        admission.Reason.PAST_CONTIG_END,
+        admission.Reason.LIFT_COLLISION,
     )
     per_analysis = "; ".join(
         f"analysis {analysis_id!r}: "
@@ -691,7 +722,9 @@ def _place_analysis(
     for one in placed:
         gate.unplaced(admission.Reason.LIFT_UNMAPPED, one.unmapped)
         gate.unplaced(admission.Reason.LIFT_AMBIGUOUS, one.ambiguous)
-        gate.unplaced(admission.Reason.LIFT_OFF_PRIMARY, one.off_primary)
+        for reason, keys in one.away.items():
+            gate.unplaced(admission.Reason(reason), keys)
+        gate.unplaced(admission.Reason.LIFT_COLLISION, one.collided)
         if lifted:
             harvest.add_lifted(one.batch, one.source_alid)
         else:
@@ -852,6 +885,35 @@ def _print_ingest_summary(
             f"{n_conflicting} conflicting duplicate(s) dropped)"
         )
     print(msg)
+
+
+def _verify_effect_consistency(
+    manifest_path: str | Path, analytes: list[AnalyteInput], n_workers: int
+) -> EffectConsistencyReport:
+    """Phase 2: check each Analysis's stored z against its source's own p-value (#510,
+    ADR 0069).
+
+    Each filtered file's first rows are read by the check itself, `n_workers` at a
+    time, through the resolver's projection and the Analysis's own declared INFO and
+    MAF rules, before the ingest reads a source. The check compares each row with
+    itself, so a source on another build is read as it is, unlifted.
+    """
+    rules = declared_rules(manifest_path, {a.analysis_id: GWAS_SSF_CAPABILITY for a in analytes})
+    declared = declared_p_value_tests(manifest_path)
+    return verify_effect_consistency(
+        [
+            ConsistencySource(
+                SourceSpec(
+                    a.analysis_id, str(a.filtered_path), GWAS_SSF_CAPABILITY, a.source_build,
+                    a.stored_effect_scale,
+                ),
+                rules[a.analysis_id],
+                declared.get(a.analysis_id),
+            )
+            for a in analytes
+        ],
+        n_workers=n_workers,
+    )
 
 
 def _verify_eaf_orientation(
@@ -1015,13 +1077,15 @@ def _write_indexes_and_metadata(
     *,
     encoding: StoreEncoding,
     eaf_report: EafOrientationReport,
+    consistency: EffectConsistencyReport,
     csr: RaggedCSRWriter,
 ) -> None:
     """Build the top-hit index and write analyses.tsv from the manifest.
 
     The shared-core metadata columns arrive as one PassthroughMetadata per
     analysis and are copied verbatim (issue #83); the orientation evidence
-    each analysis earned in Phase 2 is stamped onto its row, the hit counts
+    each analysis earned in Phase 2 is stamped onto its row with its
+    effect-consistency evidence (#510), the hit counts
     are added from the just-built index, and `csr` counts what it left out of
     each (issue #338).
     """
@@ -1049,7 +1113,12 @@ def _write_indexes_and_metadata(
     ]
     write_analysis_records(
         staged.path / "analyses.tsv",
-        csr.counted(add_hit_counts(staged.path, apply_orientation_evidence(analyses, eaf_report))),
+        csr.counted(
+            add_hit_counts(
+                staged.path,
+                apply_build_evidence(analyses, eaf_report, consistency),
+            )
+        ),
     )
 
 

@@ -28,6 +28,8 @@ import hashlib
 import json
 import logging
 import os
+import queue
+import threading
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -38,6 +40,14 @@ import numpy as np
 import pysam
 
 from opengwasdb.completion.impute import ld_pca, min_observed_points
+from opengwasdb.model.ld_panel_files import (
+    INDEL_REFERENCE_PROVENANCE,
+    INDEL_REFERENCE_TABLE,
+    block_matrix_files,
+    chromosome_tables,
+    list_chromosomes,
+    panel_input_files,
+)
 from opengwasdb.store_reader.identity import (
     VariantNormalisationError,
     identity_allele,
@@ -179,12 +189,7 @@ def indel_key(chromosome: str, position: str | int, first: str, second: str) -> 
     return chrom, pos, a1, a2
 
 
-#: The indel-reference table and its provenance, beside a panel's blocks in
-#: ``ld_dir/{ancestry}``: bgzipped and tabix-indexed, one row per panel indel
-#: (`scripts/build_panel_indel_reference.py`).
-INDEL_REFERENCE_TABLE = "indel_reference.tsv.gz"
-INDEL_REFERENCE_PROVENANCE = "indel_reference.json"
-#: The table's columns. ``allele1``/``allele2`` are the panel id's (sorted)
+#: The indel-reference table's columns. ``allele1``/``allele2`` are the panel id's (sorted)
 #: alleles, ``reference`` one of them or ``.``, and ``outcome`` how it was
 #: settled or why not.
 INDEL_REFERENCE_COLUMNS = ("chromosome", "position", "allele1", "allele2", "reference", "outcome")
@@ -631,12 +636,13 @@ def load_block(tsv_path: Path) -> LDBlock | None:
     ld_dir/{ancestry}/{chr}/{block_name}.tsv layout.
     """
     tsv_path = Path(tsv_path)
-    ld_path = tsv_path.with_suffix(".unphased.vcor1.gz")
-    npz_path = tsv_path.with_suffix(".ldeig.npz")
-    has_ld = ld_path.exists()
-    has_npz = npz_path.exists()
-    if not (has_ld or has_npz):
+    matrices = block_matrix_files(tsv_path)
+    if not matrices:
         return None
+    npz_path = tsv_path.with_suffix(".ldeig.npz")
+    ld_path = tsv_path.with_suffix(".unphased.vcor1.gz")
+    has_npz = npz_path in matrices
+    has_ld = ld_path in matrices
 
     try:
         table = _read_block_tsv(tsv_path)
@@ -784,15 +790,105 @@ def _alids_at(block: LDBlock, position: int) -> set[str]:
     }
 
 
-def list_chromosomes(ld_dir: str | Path, ancestry: str) -> list[str]:
-    """Return the chromosome names present in the panel for *ancestry*."""
-    ancestry_dir = Path(ld_dir) / ancestry
-    if not ancestry_dir.is_dir():
-        return []
-    return sorted(
-        (p.name for p in ancestry_dir.iterdir() if p.is_dir()),
-        key=lambda c: (len(c), c),
-    )
+#: The most threads that hash a panel's files at once. Hashing releases the GIL,
+#: and a daemon thread blocked on an unreadable file never holds the process open.
+_HASH_WORKERS = 16
+
+
+def _hash_from(
+    paths: Sequence[Path], pending: queue.SimpleQueue[int], digests: list[str | None],
+    errors: list[Exception],
+) -> None:
+    """One hashing thread: `_sha256` of each path whose index it takes from ``pending``."""
+    while not errors:
+        try:
+            index = pending.get_nowait()
+            digests[index] = _sha256(paths[index])
+        except queue.Empty:
+            return
+        except Exception as exc:
+            errors.append(exc)
+
+
+def _sha256_each(paths: Sequence[Path]) -> list[str]:
+    """`_sha256` of every path, up to `_HASH_WORKERS` at a time. A file that cannot
+    be read raises its error, whatever kind; one that never returns (a FIFO) leaves the caller
+    interruptible."""
+    digests: list[str | None] = [None] * len(paths)
+    pending: queue.SimpleQueue[int] = queue.SimpleQueue()
+    for index in range(len(paths)):
+        pending.put(index)
+    errors: list[Exception] = []
+    threads = [
+        threading.Thread(target=_hash_from, args=(paths, pending, digests, errors), daemon=True)
+        for _ in range(min(_HASH_WORKERS, len(paths)))
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        while thread.is_alive():
+            thread.join(0.5)
+    if errors:
+        raise errors[0]
+    return [_hashed(digest) for digest in digests]
+
+
+def _hashed(digest: str | None) -> str:
+    if digest is None:
+        raise RuntimeError("a panel file was not hashed: no digest is better than a wrong one")
+    return digest
+
+
+def panel_digest(ld_dir: str | Path, ancestry: str) -> str:
+    """The sha256 of the panel completion reads: for each of `panel_input_files`, in
+    that order, the line ``<path under ld_dir/ancestry>\\n<size>\\n<sha256 of the file>\\n``.
+    The whole of every input is hashed (spec §12.1), so one changed byte changes it."""
+    root = Path(ld_dir) / ancestry
+    files = panel_input_files(ld_dir, ancestry)
+    outer = hashlib.sha256()
+    for path, digest in zip(files, _sha256_each(files), strict=True):
+        outer.update(f"{path.relative_to(root).as_posix()}\n{path.stat().st_size}\n{digest}\n".encode())
+    return outer.hexdigest()
+
+
+@dataclass(frozen=True)
+class PanelSource:
+    """The LD panel a completion is asked to read: its root as the caller gave it, the
+    ancestry whose blocks it reads, and the name the caller gives the panel, if any."""
+
+    path: str | Path
+    ancestry: str = "EUR"
+    name: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.name is not None and not self.name.strip():
+            raise ValueError("ld_panel_id is empty: name the panel or leave it unset")
+
+
+@dataclass(frozen=True)
+class PanelIdentity:
+    """Which LD panel a completion read: the path as the caller gave it, the digest
+    of its inputs, its ancestry directory, and the name the caller gave it, if any."""
+
+    path: str
+    digest: str
+    ancestry_dir: str
+    given_id: str | None
+
+    @classmethod
+    def read(cls, source: PanelSource, *, read_from: str | Path | None = None) -> PanelIdentity:
+        """The panel ``source`` names, read from ``read_from`` where that is the resolved
+        path of the same directory (a resumed run's). The caller has checked it has
+        chromosomes (`check_panel_has_chromosomes`)."""
+        digest = panel_digest(read_from or source.path, source.ancestry)
+        return cls(
+            str(source.path), digest, str(Path(source.path) / source.ancestry), source.name
+        )
+
+    @property
+    def panel_id(self) -> str:
+        """The caller's name, else ``sha256:`` and the digest's first 16 digits."""
+        return self.given_id or f"sha256:{self.digest[:16]}"
 
 
 class LdPanelNotFoundError(Exception):
@@ -841,7 +937,7 @@ def list_all_blocks(ld_dir: str | Path, ancestry: str, chrom: str) -> list[LDBlo
         return []
 
     blocks: list[LDBlock] = []
-    for tsv_path in sorted(panel_dir.glob("*.tsv")):
+    for tsv_path in chromosome_tables(ld_dir, ancestry, chrom):
         block = load_block(tsv_path)
         if block is not None:
             blocks.append(block)

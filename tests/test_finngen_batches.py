@@ -33,6 +33,7 @@ from batch_fixtures import (
 )
 from finngen_cases import CASES, GOLDEN, Case, _row
 from liftover_fixtures import ALT_LIFTED_ROW, PRIMARY_LIFTED_ROW
+from ssf_cases import implied_p
 from test_column_map_reader import _FINNGEN_FIXTURES
 from test_indel_alid import _finngen_text
 from test_indel_pairs import _finngen as _pairs_finngen
@@ -73,11 +74,20 @@ def _generated(directory: Path) -> Path:
         se = "0" if i % 89 == 0 else repr(abs(pick.gauss(0.05, 0.02)) + 1e-6)
         af = "1" if i % 79 == 0 else ("-0.5" if i % 83 == 0 else repr(pick.random()))
         chrom = pick.choice(["1", "2", "7", "22", "23", "X"])
-        lines.append(finngen_cases._row(chrom, str(1_000 + 37 * i), ref, alt, beta, se, af))
+        row = finngen_cases._row(chrom, str(1_000 + 37 * i), ref, alt, beta, se, af)
+        lines.append(_with_implied_p(row, beta, se))
     path = directory / "generated.tsv.gz"
     with gzip.open(path, "wt", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
     return path
+
+
+def _with_implied_p(row: str, beta: str, se: str) -> str:
+    """``row`` with the `pval` its beta and SE imply, so a build's check of beta/se
+    against the source's p (#510, ADR 0069) finds them agreeing, as a real file's do."""
+    cells = row.split("\t")
+    cells[6] = implied_p(beta, se)
+    return "\t".join(cells)
 
 
 def _from_text(name: str, text: str) -> Callable[[Path], Path]:

@@ -22,6 +22,12 @@ GRCh38 (`LiftedRow.alid`), and a key whose statistics that projection
 re-orients (`statistics_swap`) is written to the artifact's
 ``reoriented_keys``, so a build reading it re-signs exactly what Pass 1 would
 (issue #354).
+
+Two source loci the lift puts on one ALID are a collision (#325): every lifted
+site of that ALID is left out and returned, by the rule `place_union` applies
+(`find_lift_collisions`), once the post-lift merge has brought the ALID's sites
+together; a lifted site the both-assemblies rule drops is carried that far as a
+partner only, since `place_union` finds a collision before that rule (#260).
 """
 
 from __future__ import annotations
@@ -31,11 +37,14 @@ import logging
 import shutil
 import tempfile
 import time
+from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from functools import partial
 from pathlib import Path
+from types import MappingProxyType
 from typing import NamedTuple, TypeVar
 
 from opengwasdb.build.liftover import LiftoverFailureError, lifted_rows, statistics_swap
@@ -44,11 +53,15 @@ from opengwasdb.readers.registry import SourceSpec, open_source
 from opengwasdb.variants.axis import alid_sort_key
 from opengwasdb.variants.normalise import canonical_alid
 from opengwasdb.variants.reference import ARTIFACT_HEADER, artifact_line
-from opengwasdb.variants.routing.keys import SourceKey, routing_key
+from opengwasdb.variants.routing.keys import SourceKey, raw_site_key, routing_key
 from opengwasdb.variants.routing.lift import (
+    DroppedSource,
+    LiftedAwayReason,
+    collided_sites,
     cross_assembly_collisions,
+    find_lift_collisions,
     log_cross_assembly_drop,
-    split_off_primary,
+    split_lifted,
 )
 from opengwasdb.variants.routing.names import refuse_disputed_names
 from opengwasdb.variants.routing.union import (
@@ -63,6 +76,10 @@ from opengwasdb.variants.routing.union import (
 from opengwasdb.variants.windows import WindowKey, window_key, window_size_bp
 
 log = logging.getLogger(__name__)
+
+#: The empty `_bucket_lifted_records` ``away``.
+NO_LIFTED_SITES: Mapping[SourceKey, LiftedAwayReason] = MappingProxyType({})
+
 
 #: What extraction's refusal of a disputed name calls it.
 EXTRACTION_LABEL = "Variant Reference extraction"
@@ -104,6 +121,9 @@ class VariantReferenceExtraction:
     n_window_shards: int = 0
     n_reduced_windows: int = 0
     reduce_levels: int = 0
+    #: Each lifted source dropped because another source locus lifted onto its ALID
+    #: (#325), with that ALID and the rsid its own source named it.
+    lift_collisions: tuple[DroppedSource, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -120,16 +140,18 @@ class _WindowArtifact:
     n_alids: int
     n_source_keys: int
     n_rsids: int
+    lift_collisions: tuple[DroppedSource, ...] = ()
 
 
 @dataclass(frozen=True)
 class _StreamedArtifact:
-    """The streaming all-hg38 artifact writer's result (issue #196)."""
+    """The streaming artifact writer's result (issue #196)."""
 
     n_variants: int
     n_source_keys: int
     n_rsids: int
     write_seconds: float
+    lift_collisions: tuple[DroppedSource, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -146,8 +168,8 @@ class _StagedWindow:
 
     ``reoriented`` counts the window's hg19 keys whose statistics the lift
     re-oriented and which survived the cross-assembly drop, which the parent
-    logs (issue #354). ``off_primary`` counts its hg19 keys the lift placed on an
-    alt, random or unplaced contig, which a reference does not hold (#376).
+    logs (issue #354). ``away`` counts its hg19 keys the lift placed where no Store
+    row can be (`split_lifted`), which a reference does not hold (#376, #410).
     """
 
     buckets: tuple[_LiftedBucket, ...]
@@ -155,7 +177,7 @@ class _StagedWindow:
     failures: int
     collisions: int
     reoriented: int
-    off_primary: int = 0
+    away: Counter[LiftedAwayReason] = field(default_factory=Counter)
 
 
 @dataclass(frozen=True)
@@ -283,6 +305,7 @@ class _Extraction:
             n_window_shards=stats.n_window_shards,
             n_reduced_windows=stats.n_reduced_windows,
             reduce_levels=stats.reduce_levels,
+            lift_collisions=streamed.lift_collisions,
         )
 
 
@@ -376,8 +399,11 @@ def _finish_members(
     an empty reference, indistinguishable from a real answer, and the caller's
     ``n_variants == 0`` guard must see no artifact on disk (issue #197 review).
     """
-    if not artifacts:
-        return _StreamedArtifact(0, 0, 0, time.monotonic() - write_start)
+    dropped = tuple(source for artifact in artifacts for source in artifact.lift_collisions)
+    if not any(artifact.n_alids for artifact in artifacts):
+        # A window may hold only sites written nowhere (a lift collision's), so the
+        # members, not their number, say whether there is anything to reference.
+        return _StreamedArtifact(0, 0, 0, time.monotonic() - write_start, dropped)
     with gzip.open(out, "wt", encoding="utf-8") as handle:
         handle.write(ARTIFACT_HEADER)
     _concatenate_window_members(out, artifacts)
@@ -386,6 +412,7 @@ def _finish_members(
         n_source_keys=sum(artifact.n_source_keys for artifact in artifacts),
         n_rsids=sum(artifact.n_rsids for artifact in artifacts),
         write_seconds=time.monotonic() - write_start,
+        lift_collisions=dropped,
     )
 
 
@@ -419,18 +446,35 @@ def _write_streaming_artifact(
         return _finish_members(out, artifacts, write_start)
 
 
+class _RecordKind(Enum):
+    """What an intermediate record is, by the code its line carries."""
+
+    #: A GRCh38 site, at its own coordinate.
+    NATIVE = "n"
+    #: An hg19 site the lift placed.
+    LIFTED = "l"
+    #: A lifted site the both-assemblies rule dropped: written nowhere, but still a
+    #: locus the lift put on its ALID, so it collides there as `place_union` finds it
+    #: (#325).
+    PARTNER = "p"
+
+
 def _lifted_line(
     rank: tuple[int, int],
     pre_site: tuple[str, int, str, str],
     alid: str,
     reoriented: bool,
     rsid: str,
+    kind: _RecordKind = _RecordKind.NATIVE,
 ) -> str:
     """One intermediate record: rank, pre-lift site, post-lift ALID, whether the
-    lift re-oriented the site, and its rsid."""
+    lift re-oriented the site, its rsid, and its kind."""
     chunk, spill = rank
     chrom, pos, ref, alt = pre_site
-    return f"{chunk}\t{spill}\t{chrom}\t{pos}\t{ref}\t{alt}\t{alid}\t{int(reoriented)}\t{rsid}\n"
+    return (
+        f"{chunk}\t{spill}\t{chrom}\t{pos}\t{ref}\t{alt}\t{alid}\t{int(reoriented)}\t{rsid}"
+        f"\t{kind.value}\n"
+    )
 
 
 def _read_assembly_records(
@@ -457,13 +501,13 @@ def _read_assembly_records(
 
 class _Buckets(NamedTuple):
     """`_bucket_lifted_records`' result: the post-lift buckets, the identities both
-    assemblies declared, the re-oriented sites the buckets hold, and the off-primary
-    sites left out (#376)."""
+    assemblies declared, the re-oriented sites the buckets hold, and the lifted sites
+    left out because no Store row can be where they landed (#376, #410)."""
 
     buckets: dict[WindowKey, list[str]]
     collisions: int
     reoriented: int
-    off_primary: int
+    away: Counter[LiftedAwayReason]
 
 
 def _bucket_lifted_records(
@@ -472,7 +516,7 @@ def _bucket_lifted_records(
     lifted: Mapping[tuple[str, int, str, str], str],
     reoriented: AbstractSet[SourceKey],
     size_bp: int,
-    off_primary: AbstractSet[SourceKey] = frozenset(),
+    away: Mapping[SourceKey, LiftedAwayReason] = NO_LIFTED_SITES,
 ) -> _Buckets:
     """Drop cross-assembly ambiguous tuples, then bucket survivors by post-lift window.
 
@@ -481,16 +525,18 @@ def _bucket_lifted_records(
     dropped from both. A routing key fixes its pre-lift window, so the union
     of these window-local rulings is exactly the global one (issue #197).
     ``lifted`` is each lifted site's ALID and ``reoriented`` the sites whose
-    statistics the lift re-oriented (issue #354). ``off_primary`` is the hg19
-    sites the lift placed off the primary assembly: no bucket holds them, but
-    each is a lifted locus for the collision rule (#376). Returns the buckets,
+    statistics the lift re-oriented (issue #354). ``away`` is the hg19 sites the
+    lift placed where no Store row can be (`split_lifted`): no bucket holds them, but
+    each is a lifted locus for the collision rule (#376, #410). A lifted site the rule
+    drops is still bucketed, as a partner only: the lift put it on its ALID, so
+    another locus lifted there collides with it (#325). Returns the buckets,
     the number of identities both groups declared, the number of re-oriented
-    sites the buckets hold, and the number of off-primary sites left out.
+    sites the buckets hold, and how many ``away`` sites were left out, by reason.
     """
-    n_tuples, collisions = _colliding_sites(hg38_records.keys(), lifted.keys() | off_primary)
+    n_tuples, collisions = _colliding_sites(hg38_records.keys(), lifted.keys() | away.keys())
     buckets: dict[WindowKey, list[str]] = {}
     n_reoriented = 0
-    n_off_primary = len(off_primary - collisions)
+    n_away = _left_out(away, collisions)
     for site, (rank, rsid) in hg38_records.items():
         if site in collisions:
             continue
@@ -499,14 +545,35 @@ def _bucket_lifted_records(
         )
     for site, (rank, rsid) in hg19_records.items():
         alid = lifted.get(site)
-        if alid is None or site in collisions:
+        if alid is None:
             continue
+        kind = _RecordKind.PARTNER if site in collisions else _RecordKind.LIFTED
         post_chrom, post_pos, _a1, _a2 = alid.split(":")
-        n_reoriented += site in reoriented
+        n_reoriented += kind is _RecordKind.LIFTED and site in reoriented
         buckets.setdefault(window_key(post_chrom, int(post_pos), size_bp), []).append(
-            _lifted_line(rank, site, alid, site in reoriented, rsid)
+            _lifted_line(rank, site, alid, site in reoriented, rsid, kind)
         )
-    return _Buckets(buckets, n_tuples, n_reoriented, n_off_primary)
+    return _Buckets(buckets, n_tuples, n_reoriented, n_away)
+
+
+def _left_out(
+    away: Mapping[SourceKey, LiftedAwayReason], collisions: AbstractSet[SourceKey]
+) -> Counter[LiftedAwayReason]:
+    """How many of ``away`` are left out, by reason: those not already dropped as
+    spelling an identity both assemblies declare."""
+    return Counter(reason for site, reason in away.items() if site not in collisions)
+
+
+def _log_lifted_away(counts: Counter[LiftedAwayReason]) -> None:
+    """Say how many source keys the lift placed where no Store row can be, by reason,
+    which the Variant Reference leaves out."""
+    if counts:
+        log.warning(
+            "%d source key(s) lifted where no Store row can be, which the Variant "
+            "Reference does not hold -- left out (%s)",
+            sum(counts.values()),
+            ", ".join(f"{reason}: {n}" for reason, n in sorted(counts.items())),
+        )
 
 
 def _colliding_sites(
@@ -536,11 +603,11 @@ def _stage_liftover_window(task: _LiftStageTask) -> _StagedWindow:
     rows, attempts, failures = lifted_rows(
         hg19_records, chain_file=task.chain_file, from_build="hg19", to_build="hg38"
     )
-    split = split_off_primary(rows)
+    split = split_lifted(rows)
     lifted = {key: row.alid for key, row in split.primary.items()}
     reoriented = {key for key, row in split.primary.items() if statistics_swap(key, row)}
     bucketed = _bucket_lifted_records(
-        hg38_records, hg19_records, lifted, reoriented, task.size_bp, split.off_primary
+        hg38_records, hg19_records, lifted, reoriented, task.size_bp, split.away
     )
     buckets = bucketed.buckets
     members_dir = Path(task.members_dir)
@@ -552,13 +619,28 @@ def _stage_liftover_window(task: _LiftStageTask) -> _StagedWindow:
         specs.append(_LiftedBucket(post_window, sub_shard_path))
     return _StagedWindow(
         tuple(specs), attempts, failures, bucketed.collisions, bucketed.reoriented,
-        bucketed.off_primary,
+        bucketed.away,
     )
 
 
-#: One intermediate record, typed: chunk, spill, the pre-lift site, its
-#: post-lift ALID, whether the lift re-oriented it, and its rsid.
-_LiftedRecord = tuple[int, int, str, int, str, str, str, bool, str]
+class _LiftedRecord(NamedTuple):
+    """One intermediate record, typed."""
+
+    chunk: int
+    spill: int
+    #: The pre-lift source site.
+    site: SourceKey
+    #: The post-lift ALID.
+    alid: str
+    #: Whether the lift re-oriented the site.
+    reoriented: bool
+    rsid: str
+    kind: _RecordKind
+
+    @property
+    def order(self) -> tuple[int, int, SourceKey]:
+        """``(rank, site)``: the order the materialising writer inserted records in."""
+        return self.chunk, self.spill, self.site
 
 
 def _read_lifted_records(paths: Sequence[str]) -> list[_LiftedRecord]:
@@ -567,28 +649,18 @@ def _read_lifted_records(paths: Sequence[str]) -> list[_LiftedRecord]:
     for path in paths:
         with open(path, encoding="utf-8") as handle:
             for line in handle:
-                (
-                    raw_chunk,
-                    raw_spill,
-                    raw_pre_chrom,
-                    raw_pre_pos,
-                    raw_pre_ref,
-                    raw_pre_alt,
-                    raw_alid,
-                    raw_reoriented,
-                    raw_rsid,
-                ) = line.rstrip("\n").split("\t")
+                chunk, spill, chrom, pos, ref, alt, alid, reoriented, rsid, kind = (
+                    line.rstrip("\n").split("\t")
+                )
                 records.append(
-                    (
-                        int(raw_chunk),
-                        int(raw_spill),
-                        raw_pre_chrom,
-                        int(raw_pre_pos),
-                        raw_pre_ref,
-                        raw_pre_alt,
-                        raw_alid,
-                        raw_reoriented == "1",
-                        raw_rsid,
+                    _LiftedRecord(
+                        int(chunk),
+                        int(spill),
+                        (chrom, int(pos), ref, alt),
+                        alid,
+                        reoriented == "1",
+                        rsid,
+                        _RecordKind(kind),
                     )
                 )
     return records
@@ -602,20 +674,24 @@ def _compress_lifted_window(task: _LiftMergeTask) -> _WindowArtifact:
     writer's global ``(rank, site)`` insertion did. Source keys are combined and
     sorted, the ones the lift re-oriented are listed again apart, and the
     window's ALIDs are sorted by ``alid_sort_key``.
+
+    Every site of an ALID is in its post-lift window, so the lift-collision rule
+    is applied here, held to the lifted sites (`find_lift_collisions`, #325): each
+    lifted site of an ALID two source loci reach is written nowhere and returned.
     """
-    records = _read_lifted_records(task.sub_shards)
-    records.sort(key=lambda record: record[:6])
+    records, dropped = _without_lift_collisions(_read_lifted_records(task.sub_shards))
     rsid_by_alid: dict[str, str] = {}
     source_keys_by_alid: dict[str, list[str]] = {}
     reoriented_by_alid: dict[str, list[str]] = {}
     named: dict[SourceKey, str] = {}
-    for _chunk, _spill, pre_chrom, pre_pos, pre_ref, pre_alt, alid, reoriented, rsid in records:
-        if rsid:
-            named.setdefault((pre_chrom, pre_pos, pre_ref, pre_alt), rsid)
-            rsid_by_alid.setdefault(alid, rsid)
-        source_key = f"{pre_chrom}:{pre_pos}:{pre_ref}:{pre_alt}"
+    for record in records:
+        alid = record.alid
+        if record.rsid:
+            named.setdefault(record.site, record.rsid)
+            rsid_by_alid.setdefault(alid, record.rsid)
+        source_key = raw_site_key(record.site)
         source_keys_by_alid.setdefault(alid, []).append(source_key)
-        if reoriented:
+        if record.reoriented:
             reoriented_by_alid.setdefault(alid, []).append(source_key)
     refuse_disputed_names(named, label=EXTRACTION_LABEL)
     _write_member(task.member_path, rsid_by_alid, source_keys_by_alid, reoriented_by_alid)
@@ -625,7 +701,32 @@ def _compress_lifted_window(task: _LiftMergeTask) -> _WindowArtifact:
         len(source_keys_by_alid),
         sum(len(keys) for keys in source_keys_by_alid.values()),
         len(rsid_by_alid),
+        dropped,
     )
+
+
+def _without_lift_collisions(
+    records: Sequence[_LiftedRecord],
+) -> tuple[list[_LiftedRecord], tuple[DroppedSource, ...]]:
+    """The records to write, in ``(rank, site)`` order, and each lifted source a
+    collision drops (`find_lift_collisions`, held to the lifted sites, #325).
+
+    A partner record -- a lifted site the both-assemblies rule dropped -- collides
+    like any lifted site and is never written itself."""
+    ordered = sorted(records, key=lambda record: record.order)
+    collided = collided_sites(
+        find_lift_collisions(
+            {r.site: r.alid for r in ordered if r.kind is not _RecordKind.NATIVE}
+        )
+    )
+    kept: list[_LiftedRecord] = []
+    dropped: list[DroppedSource] = []
+    for record in ordered:
+        if record.kind is not _RecordKind.NATIVE and record.site in collided:
+            dropped.append(DroppedSource(record.alid, raw_site_key(record.site), record.rsid))
+        elif record.kind is not _RecordKind.PARTNER:
+            kept.append(record)
+    return kept, tuple(dropped)
 
 
 def _stage_all_windows(
@@ -728,12 +829,21 @@ def _write_lifted_streaming_artifact(
             "Liftover re-oriented %d source key(s), recorded in reoriented_keys",
             sum(stage.reoriented for stage in staged),
         )
-        if n_off_primary := sum(stage.off_primary for stage in staged):
-            log.warning(
-                "%d source key(s) lifted onto an alt, random or unplaced contig, which the "
-                "Variant Reference does not hold -- left out",
-                n_off_primary,
-            )
+        _log_lifted_away(sum((stage.away for stage in staged), Counter()))
         artifacts = _merge_lifted_windows(staged, n_workers, work_dir)
-        return _finish_members(out, artifacts, write_start)
+        streamed = _finish_members(out, artifacts, write_start)
+    _log_lift_collisions(streamed.lift_collisions)
+    return streamed
+
+
+def _log_lift_collisions(dropped: Sequence[DroppedSource]) -> None:
+    """Say how many lifted sources a collision kept out of the artifact (#325)."""
+    if dropped:
+        first = min(dropped)
+        log.warning(
+            "%d lifted source key(s) reach an ALID another source locus also lifts onto "
+            "(first: %s from %s) -- all are left out of the Variant Reference, never one "
+            "routed there",
+            len(dropped), first.alid, first.source_key,
+        )
 

@@ -403,13 +403,18 @@ def test_a_completed_store_whose_tier_has_no_imputed_is_refused(
 
 
 def _complete(layout: str, source: Path, completed: Path, panel: Path) -> None:
+    from opengwasdb.completion.ld_panel import PanelSource
+    from opengwasdb.completion.options import CompletionOptions
     from opengwasdb.layouts.dense.complete import complete_dense_store
     from opengwasdb.layouts.hybrid.complete import complete_hybrid_store
     from opengwasdb.layouts.ragged.complete import complete_ragged_store
 
     complete = {"dense": complete_dense_store, "ragged": complete_ragged_store,
                 "hybrid": complete_hybrid_store}[layout]
-    complete(source, completed, panel, ancestry="EUR", min_cor=0.0, release_id="again")
+    complete(
+        source, completed, PanelSource(panel),
+        CompletionOptions(min_cor=0.0, release_id="again"),
+    )
 
 
 @pytest.mark.parametrize("layout", ["dense", "ragged", "hybrid"])

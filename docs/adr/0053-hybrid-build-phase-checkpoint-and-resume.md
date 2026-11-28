@@ -28,7 +28,7 @@ Reference Completion uses (ADR 0023), reached through the same
 | `info_counts.json` | each Analysis's declared-score dispositions (stores #175). Since checkpoint format 3 (ADR 0072) these are the parts of the build's Admission record, beside the Store, and the checkpoint records that record's path instead |
 | `se_out_of_range.json` | each Analysis's count of associations left out for an SE above 65,504 (issue #338, ADR 0068), written since checkpoint format 5; a resume reads it |
 | `fold/` | a completion file per folded column |
-| `axis.npz`, `axis_*.txt`, `provenance_*.tsv` | the post-Pass-2 axis, frozen: key table, `old_to_new`, the ALID lists, the Dense-row map and the provenance maps |
+| `axis.npz`, `axis_*.txt`, `provenance_*.tsv` | the post-Pass-2 axis, frozen: key table, `old_to_new`, the ALID lists, the Dense-row map and the provenance maps; since checkpoint format 6 (#325) `axis_lift_collisions.tsv` names the sources, with their identities, that a lift collision dropped; since format 7 (#410) `axis_lifted_away.tsv` names each key a lift placed where no Store row can be with its Admission reason (`lift_off_primary`, `in_assembly_gap`, `past_contig_end`), where `axis_off_primary.txt` named only the first; since format 8 (#258) the recorded rsids fill every variant a named reference leaves unnamed |
 | `orientation.json`, `plan.json`, `dense_hits.npz` | the report, the encoding plan and the Dense band write's top-hit harvest |
 | `staged/` | the partially built release, renamed out of the Staged Release work directory |
 

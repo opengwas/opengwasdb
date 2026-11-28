@@ -10,6 +10,7 @@ import pytest
 import shared_releases
 
 from opengwasdb.layouts.hybrid.build import build_hybrid_from_vcf_manifest
+from tests.assembly_gap_fixtures import grch38_without_gaps, read_committed_grch38
 from tests.ld.tier_markers import unasked
 from tests.ssf_builds import build_ragged_from_ssf
 
@@ -69,6 +70,28 @@ def _builtin_liftover_reads_the_committed_chain() -> Iterator[None]:
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(pyliftover.liftover, "open_liftover_chain_file", committed)
         yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _grch38_without_gaps(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """Every test reads a GRCh38 table with its contigs' lengths and no gaps, unless it
+    is marked `assembly_gaps` (#410).
+
+    The suite's synthetic sources place GRCh38 rows at positions like `1:100`, which
+    lie in chr1's first gap (1-10,000), where the real table would have every build
+    drop them: 475 tests failed under it. Their positions stand for any position, so
+    they keep it, and the tests of the gap rule itself run against the committed
+    table (`_real_grch38_gaps`)."""
+    with grch38_without_gaps(tmp_path_factory.mktemp("grch38")):
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _real_grch38_gaps(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A test marked `assembly_gaps` reads the committed GRCh38 table, gaps and all."""
+    if request.node.get_closest_marker("assembly_gaps") is None:
+        return
+    read_committed_grch38(monkeypatch)
 
 
 #: Test modules whose every GWAS-SSF read is also made as batches and compared

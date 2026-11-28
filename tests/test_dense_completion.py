@@ -9,7 +9,9 @@ from pathlib import Path
 from shutil import copytree
 
 import numpy as np
+import panel_identity_checks as checks
 import pytest
+from completion_counts import declared_and_masked
 from completion_releases import assert_same_release
 from dense_sources import build_dense_fixture, write_dense_manifest
 from format_0_2_3 import follow_stamp
@@ -18,10 +20,11 @@ from ld_blocks import write_ld_block
 from benchmarks.compare_top_hits import compare_top_hits
 from opengwasdb.admission import NotAdmitted
 from opengwasdb.completion import fill_shards
-from opengwasdb.completion.checkpoint import checkpoint_dir_for
+from opengwasdb.completion.checkpoint import checkpoint_dir_for, start_checkpoint
 from opengwasdb.completion.ld_panel import (
     BlockPlacement,
     LdPanelNotFoundError,
+    PanelSource,
     SharedEndpoint,
     canonical_panel_alid,
     list_all_blocks,
@@ -30,6 +33,7 @@ from opengwasdb.completion.ld_panel import (
     shared_endpoints,
     snp_position,
 )
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.encoding import StoreCodec
 from opengwasdb.layouts.dense import complete as complete_module
 from opengwasdb.layouts.dense.complete import (
@@ -205,8 +209,8 @@ def _dense_completed_store_seed(
     panel = copytree(_ld_panel_seed, root / "ld_panel")
     dst = root / "comp.opengwasdb"
     complete_dense_store(
-        observed, dst, panel,
-        ancestry="EUR", min_cor=0.0, release_id="comp-v1",
+        observed, dst, PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"),
     )
     return dst
 
@@ -287,7 +291,8 @@ class TestCompletionFiles:
 
         with pytest.raises(ValueError, match="association_coverage=cis"):
             complete_dense_store(
-                observed_store, tmp_path / "comp.opengwasdb", ld_panel, min_cor=0.0
+                observed_store, tmp_path / "comp.opengwasdb", PanelSource(ld_panel),
+                CompletionOptions(min_cor=0.0),
             )
 
     def test_completion_quality_table_exists(self, completed_store):
@@ -361,8 +366,8 @@ class TestCompletionFiles:
 
         dst = tmp_path / "comp_stale.opengwasdb"
         complete_dense_store(
-            observed_store, dst, ld_panel, ancestry="EUR", min_cor=0.0,
-            release_id="comp-stale",
+            observed_store, dst, PanelSource(ld_panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0, release_id="comp-stale"),
         )
 
         dst_rows = sorted(
@@ -380,7 +385,10 @@ class TestCompletionFiles:
         self, tmp_path, observed_store, ld_panel, completed_store
     ):
         with pytest.raises(FileExistsError):
-            complete_dense_store(observed_store, completed_store, ld_panel, min_cor=0.0)
+            complete_dense_store(
+                observed_store, completed_store, PanelSource(ld_panel),
+                CompletionOptions(min_cor=0.0),
+            )
 
     def test_ld_dir_already_holding_the_ancestry_directory_raises(
         self, tmp_path, observed_store, ld_panel
@@ -391,7 +399,8 @@ class TestCompletionFiles:
         dst = tmp_path / "should_not_exist.opengwasdb"
         with pytest.raises(LdPanelNotFoundError):
             complete_dense_store(
-                observed_store, dst, ld_panel / "EUR", ancestry="EUR", min_cor=0.0,
+                observed_store, dst, PanelSource(ld_panel / "EUR", ancestry="EUR"),
+                CompletionOptions(min_cor=0.0),
             )
         assert not dst.exists()
 
@@ -444,7 +453,10 @@ class TestValidation:
         assert source_manifest["provenance"]["dense"]["chunk_shape"] == [2, 2]
 
         completed = tmp_path / "comp-small-chunk.opengwasdb"
-        complete_dense_store(observed, completed, ld_panel, ancestry="EUR", min_cor=0.0)
+        complete_dense_store(
+            observed, completed, PanelSource(ld_panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0),
+        )
         manifest = json.loads((completed / "manifest.json").read_text())
         root = open_store(completed).arrays(mode="r")
 
@@ -912,6 +924,15 @@ class TestQuery:
         np.testing.assert_array_equal(indexed["eaf"], fallback["eaf"])
 
 
+def _complete_until_the_crash(monkeypatch, observed_store, dst, ld_panel):
+    """Complete, with the second block made to crash: the checkpoint it leaves."""
+    _crash_on_the_second_block(monkeypatch)
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        complete_dense_store(
+            observed_store, dst, PanelSource(ld_panel), CompletionOptions(min_cor=0.0)
+        )
+
+
 class TestResume:
     def test_cli_complete_dense_and_its_resume_report_the_coverage(
         self, tmp_path, observed_store, ld_panel, monkeypatch
@@ -946,7 +967,8 @@ class TestResume:
         _crash_on_the_second_block(monkeypatch)
         with pytest.raises(RuntimeError, match="simulated crash"):
             complete_dense_store(
-                observed_store, resumed_dst, ld_panel, ancestry="EUR", min_cor=0.0
+                observed_store, resumed_dst, PanelSource(ld_panel, ancestry="EUR"),
+                CompletionOptions(min_cor=0.0),
             )
         monkeypatch.undo()
 
@@ -961,9 +983,7 @@ class TestResume:
         self, tmp_path, observed_store, ld_panel, monkeypatch
     ):
         dst = tmp_path / "resumed.opengwasdb"
-        _crash_on_the_second_block(monkeypatch)
-        with pytest.raises(RuntimeError, match="simulated crash"):
-            complete_dense_store(observed_store, dst, ld_panel, ancestry="EUR", min_cor=0.0)
+        _complete_until_the_crash(monkeypatch, observed_store, dst, ld_panel)
 
         checkpoint_dir = checkpoint_dir_for(dst)
         assert checkpoint_dir.exists()
@@ -989,9 +1009,7 @@ class TestResume:
         fills would reach one cell, so the resume refuses the directory,
         naming it and the two ways out, and discards nothing."""
         dst = tmp_path / "resumed.opengwasdb"
-        _crash_on_the_second_block(monkeypatch)
-        with pytest.raises(RuntimeError, match="simulated crash"):
-            complete_dense_store(observed_store, dst, ld_panel, ancestry="EUR", min_cor=0.0)
+        _complete_until_the_crash(monkeypatch, observed_store, dst, ld_panel)
         monkeypatch.undo()
 
         assert_a_resume_refuses_an_older_checkpoint(dst, resume_dense_completion)
@@ -1004,7 +1022,8 @@ class TestResume:
         checkpoint the crash never wrote."""
         fresh_dst = tmp_path / "fresh_first.opengwasdb"
         fresh = complete_dense_store(
-            observed_store, fresh_dst, ld_panel, ancestry="EUR", min_cor=0.0
+            observed_store, fresh_dst, PanelSource(ld_panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0),
         )
 
         dst = tmp_path / "crashed_first.opengwasdb"
@@ -1019,7 +1038,10 @@ class TestResume:
 
         monkeypatch.setattr(complete_module, "_run_block", crash_first_run_block)
         with pytest.raises(RuntimeError, match="simulated crash before any checkpoint"):
-            complete_dense_store(observed_store, dst, ld_panel, ancestry="EUR", min_cor=0.0)
+            complete_dense_store(
+                observed_store, dst, PanelSource(ld_panel, ancestry="EUR"),
+                CompletionOptions(min_cor=0.0),
+            )
         monkeypatch.undo()
 
         checkpoint_dir = checkpoint_dir_for(dst)
@@ -1039,23 +1061,22 @@ class TestResume:
     def test_resume_matches_fresh_run(self, tmp_path, observed_store, ld_panel):
         fresh_dst = tmp_path / "fresh.opengwasdb"
         fresh = complete_dense_store(
-            observed_store, fresh_dst, ld_panel, ancestry="EUR", min_cor=0.0
+            observed_store, fresh_dst, PanelSource(ld_panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0),
         )
 
         resumable_dst = tmp_path / "resumable.opengwasdb"
         checkpoint_dir = checkpoint_dir_for(resumable_dst)
-        checkpoint_dir.mkdir(parents=True)
-        (checkpoint_dir / "blocks").mkdir()
-        import json
-        (checkpoint_dir / "build_params.json").write_text(
-            json.dumps({
+        (checkpoint_dir / "blocks").mkdir(parents=True)
+        start_checkpoint(
+            checkpoint_dir,
+            {
                 "source_path": str(Path(observed_store).resolve()),
                 "dest_path": str(resumable_dst.resolve()),
                 "ld_dir": str(Path(ld_panel).resolve()),
-                "ancestry": "EUR", "min_cor": 0.0, "thresh": 0.9,
-                "release_id": None, "ld_panel_id": "eur-hg38-gpm",
-            }),
-            encoding="utf-8",
+                "ancestry": "EUR", "min_cor": 0.0, "thresh": 0.9, "release_id": None,
+            },
+            PanelSource(ld_panel),
         )
         resumed = resume_dense_completion(checkpoint_dir)
 
@@ -1078,11 +1099,13 @@ class TestParallel:
         caplog.clear()
         serial_dst = tmp_path / "serial.opengwasdb"
         serial = complete_dense_store(
-            observed_store, serial_dst, ld_panel, ancestry="EUR", min_cor=0.0, n_workers=1
+            observed_store, serial_dst, PanelSource(ld_panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0, n_workers=1),
         )
         parallel_dst = tmp_path / "parallel.opengwasdb"
         parallel = complete_dense_store(
-            observed_store, parallel_dst, ld_panel, ancestry="EUR", min_cor=0.0, n_workers=2
+            observed_store, parallel_dst, PanelSource(ld_panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0, n_workers=2),
         )
         assert parallel.n_variants == serial.n_variants
         assert parallel.n_imputed == serial.n_imputed
@@ -1461,8 +1484,8 @@ class TestPanelFormatIndependence:
         )
         dst = tmp_path / "legacy.opengwasdb"
         result = complete_dense_store(
-            observed_store, dst, root,
-            ancestry="EUR", min_cor=0.0, release_id="comp-v1",
+            observed_store, dst, PanelSource(root, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0, release_id="comp-v1"),
         )
         assert validate_store(dst).ok
         assert result.n_variants == 8
@@ -1560,8 +1583,8 @@ class TestEigendecompositionOnlyPanelImputesRealCells:
 
         dst = tmp_path / "signal_comp.opengwasdb"
         complete_dense_store(
-            signal_observed_store, dst, signal_panel_npz_only,
-            ancestry="EUR", min_cor=0.0, release_id="comp-signal-v1",
+            signal_observed_store, dst, PanelSource(signal_panel_npz_only, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0, release_id="comp-signal-v1"),
         )
 
         root = open_store(dst).arrays(mode="r")
@@ -1583,8 +1606,10 @@ class TestEigendecompositionOnlyPanelImputesRealCells:
         reread_with(monkeypatch, lambda block: replace(block, alids=[None, *block.alids[1:]]))
         with pytest.raises(PanelReadMismatchError, match=r"names \d+ of \d+ rows"):
             complete_dense_store(
-                signal_observed_store, tmp_path / "comp.opengwasdb", signal_panel_npz_only,
-                ancestry="EUR", min_cor=0.0, release_id="comp-signal-v1",
+                signal_observed_store,
+                tmp_path / "comp.opengwasdb",
+                PanelSource(signal_panel_npz_only, ancestry="EUR"),
+                CompletionOptions(min_cor=0.0, release_id="comp-signal-v1"),
             )
 
 
@@ -1612,8 +1637,8 @@ def imputing_completed_store(
     """
     dst = tmp_path / "signal_declared.opengwasdb"
     complete_dense_store(
-        signal_observed_store, dst, signal_panel_npz_only,
-        ancestry="EUR", min_cor=0.0, release_id="comp-signal-v1",
+        signal_observed_store, dst, PanelSource(signal_panel_npz_only, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-signal-v1"),
     )
     assert open_store(dst).arrays(mode="r")["imputed"][:].sum() > 0, (
         "nothing was imputed, so nothing below is under test"
@@ -1656,6 +1681,121 @@ def test_validator_rejects_imputed_cells_held_but_not_declared(imputing_complete
     _rewrite_analyses(imputing_completed_store, completion_n_imputed_total="0")
 
     assert _matching(imputing_completed_store, fragment)
+
+
+@pytest.mark.parametrize(
+    ("declare", "phrase"),
+    [(lambda masked: masked + 1, "1 more than"), (lambda masked: 0, "fewer than")],
+    ids=["one-more", "zero"],
+)
+def test_the_exact_rule_alone_fails_a_total_that_is_not_the_masks(
+    imputing_completed_store: Path, declare, phrase: str
+):
+    """Run on its own (`rules=`), `completion.imputed_total` fails a total one
+    above or zero against what the mask holds (#362): it needs no
+    other rule to catch the difference."""
+    imputed = open_store(imputing_completed_store).arrays(mode="r")["imputed"][:, 0]
+    masked = int((imputed == 1).sum())
+    assert masked >= 1  # fixture first: the Analysis holds imputed cells
+    rule = {"completion.imputed_total"}
+    clean = validate_store(imputing_completed_store, rules=rule)
+    assert clean.failed() == set(), clean.errors
+
+    _rewrite_analyses(
+        imputing_completed_store, completion_n_imputed_total=str(declare(masked))
+    )
+
+    result = validate_store(imputing_completed_store, rules=rule)
+    assert result.failed() == rule
+    (message,) = result.of("completion.imputed_total")
+    assert f"declares completion_n_imputed_total={declare(masked)}" in str(message)
+    assert f"marks {masked} imputed=1 cell(s)" in str(message) and phrase in str(message)
+
+
+@pytest.mark.parametrize(
+    "value", ["", "-1", "x", "1.5", "007"],
+    ids=["blank", "negative", "text", "float", "leading-zero"],
+)
+@pytest.mark.parametrize(
+    ("rule", "column"),
+    [("completion.imputed_total", "completion_n_imputed_total"),
+     ("completion.missing_total", "completion_n_missing_total")],
+)
+def test_an_exact_total_rule_alone_fails_a_value_it_cannot_read(
+    imputing_completed_store: Path, rule: str, column: str, value: str
+):
+    """A blank is not a zero and a negative is no count: the rule says which, on its own
+    (#362)."""
+    assert validate_store(imputing_completed_store, rules={rule}).failed() == set()  # clean first
+    _rewrite_analyses(imputing_completed_store, **{column: value})
+
+    result = validate_store(imputing_completed_store, rules={rule})
+
+    assert result.failed() == {rule}
+    assert any(
+        f"{column}={value!r}" in str(m) and "not a non-negative integer" in str(m)
+        for m in result.of(rule)
+    ), result.errors
+
+
+@pytest.mark.parametrize("column", ["completion_n_imputed_total", "completion_n_missing_total"])
+def test_a_completed_release_without_a_total_column_fails_once(
+    imputing_completed_store: Path, column: str
+):
+    """A total the table does not carry is a total nobody declared, not a zero: validation
+    says so, once, whichever total it is (#362)."""
+    from opengwasdb.store_reader.analyses import AnalysesTable
+
+    before = validate_store(imputing_completed_store).failed()  # the fixture's own failures
+    table = read_analyses(imputing_completed_store / "analyses.tsv")
+    kept = tuple(f for f in table.fieldnames if f != column)
+    write_analyses(
+        imputing_completed_store / "analyses.tsv",
+        AnalysesTable(kept, tuple({k: row[k] for k in kept} for row in table.rows)),
+    )
+
+    result = validate_store(imputing_completed_store)
+
+    named = [e for e in result.errors if f"missing {column} " in e]
+    assert result.failed() - before == {"completion.n_missing_column"}, result.errors
+    assert len(named) == 1, result.errors
+
+
+def test_a_missing_total_is_not_excused_by_a_source_se_loss_elsewhere(completed_store: Path):
+    """The Dense missing total is exactly the off-panel cells held: a1's recorded SE loss of
+    one cannot hide a2's one off-panel missing cell going undeclared (#362)."""
+    table = read_analyses(completed_store / "analyses.tsv")
+    assert table.rows[1]["completion_n_missing_total"] == "1"  # fixture first
+    table.rows[1]["completion_n_missing_total"] = "0"
+    table.rows[1]["n_missing_se_out_of_range"] = "1"
+    write_analyses(completed_store / "analyses.tsv", table)
+
+    result = validate_store(completed_store, rules={"completion.missing_total"})
+
+    assert result.failed() == {"completion.missing_total"}
+
+
+def test_the_missing_rule_alone_fails_a_missing_total_that_is_not_the_releases(
+    completed_store: Path,
+):
+    """Dense declares the cells it holds no value at off the panel: a2 observes nothing at
+    the one off-panel variant. Declaring one more than the release holds there fails the
+    exact missing-total rule on its own (#362)."""
+    rule = {"completion.missing_total"}
+    rows = read_analyses(completed_store / "analyses.tsv").rows
+    held = int(rows[1]["completion_n_missing_total"])
+    assert held == 1  # fixture first: a2's one off-panel missing cell
+    clean = validate_store(completed_store, rules=rule)
+    assert clean.failed() == set(), clean.errors
+
+    table = read_analyses(completed_store / "analyses.tsv")
+    table.rows[1]["completion_n_missing_total"] = str(held + 1)
+    write_analyses(completed_store / "analyses.tsv", table)
+
+    result = validate_store(completed_store, rules=rule)
+    assert result.failed() == rule
+    (message,) = result.of("completion.missing_total")
+    assert f"declares completion_n_missing_total={held + 1}" in str(message)
 
 
 def test_validator_rejects_a_completion_count_without_a_completion(
@@ -1817,8 +1957,8 @@ def test_a_source_cell_with_one_of_z_and_se_missing_is_refused(
         rf"analysis {analysis}: partial\)",
     ):
         complete_dense_store(
-            observed_store, tmp_path / "comp.opengwasdb", ld_panel,
-            ancestry="EUR", min_cor=0.0, release_id="comp-v1",
+            observed_store, tmp_path / "comp.opengwasdb", PanelSource(ld_panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0, release_id="comp-v1"),
         )
     assert not (tmp_path / "comp.opengwasdb").exists()
 
@@ -1879,8 +2019,8 @@ def test_a_source_marker_other_than_the_canonical_nan_is_refused(
 
     with pytest.raises(refusal, match=where):
         complete_dense_store(
-            observed_store, tmp_path / "comp.opengwasdb", ld_panel,
-            ancestry="EUR", min_cor=0.0, release_id="comp-v1",
+            observed_store, tmp_path / "comp.opengwasdb", PanelSource(ld_panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0, release_id="comp-v1"),
         )
     assert not (tmp_path / "comp.opengwasdb").exists()
 
@@ -2006,7 +2146,8 @@ def test_a_shared_endpoint_is_filled_by_the_block_that_starts_there_and_counted_
     assert {len(_ENDING_AT), len(_STARTING_AT)} <= set(_FILL_BY_BLOCK_SIZE)
 
     result = complete_dense_store(
-        observed_store, dst, panel, ancestry="EUR", min_cor=0.0, release_id="comp-v1"
+        observed_store, dst, PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"),
     )
 
     z, imputed = _cell(dst, "1:1050000:C:T", 0)
@@ -2057,7 +2198,8 @@ def test_a_panel_row_no_alid_names_is_counted_by_no_block(
     for name, panel in (("plain", plain), ("unnamed", unnamed)):
         dst = tmp_path / f"{name}.opengwasdb"
         complete_dense_store(
-            observed_store, dst, panel, ancestry="EUR", min_cor=0.0, release_id="comp-v1"
+            observed_store, dst, PanelSource(panel),
+            CompletionOptions(min_cor=0.0, release_id="comp-v1"),
         )
         counts[name] = _quality(dst)
         assert_dense_counts_are_cells(dst, panel)
@@ -2080,7 +2222,8 @@ def test_a_shared_endpoint_does_not_depend_on_block_order(
         panel = _boundary_panel(tmp_path / ending / "panel", ending, "1050000-1200000")
         dst = tmp_path / ending / "comp.opengwasdb"
         complete_dense_store(
-            observed_store, dst, panel, ancestry="EUR", min_cor=0.0, release_id="comp-v1"
+            observed_store, dst, PanelSource(panel),
+            CompletionOptions(min_cor=0.0, release_id="comp-v1"),
         )
         stores.append(dst)
     # Fixture first: the two names sort on either side of the starting block's.
@@ -2120,7 +2263,8 @@ def test_two_overlapping_blocks_filling_one_cell_leave_it_missing_and_log_both(
     dst = tmp_path / "comp.opengwasdb"
 
     complete_dense_store(
-        observed_store, dst, ld_panel, ancestry="EUR", min_cor=0.0, release_id="comp-v1"
+        observed_store, dst, PanelSource(ld_panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"),
     )
 
     z, imputed = _cell(dst, "1:1050000:C:T", 0)
@@ -2135,6 +2279,48 @@ def test_two_overlapping_blocks_filling_one_cell_leave_it_missing_and_log_both(
         1.767842,
         2.949039,
     ]
+
+
+@pytest.mark.parametrize("agree", [False, True], ids=["conflicting-fills", "agreeing-fills"])
+def test_a_cell_two_overlapping_blocks_fill_is_counted_as_the_mask_holds_it(
+    tmp_path: Path,
+    observed_store: Path,
+    ld_panel: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    agree: bool,
+):
+    """Two blocks both fill a1 at 1:1050000:C:T, which is no endpoint of either.
+    Different blocks fill it differently (the cell is cleared); a second copy of
+    the same block fills it alike (the cell is kept, once). Either way the
+    declared imputed total is the mask's count, not the blocks' sum (#362)."""
+    _stub_fits(monkeypatch)
+    if agree:  # the fixture's own block under another name: the same fill, same SE
+        variants = [
+            ("1:900000:A:G", 0.35, 900_000), ("1:950000:A:C", 0.32, 950_000),
+            ("1:1000000:A:G", 0.30, 1_000_000), ("1:1050000:C:T", 0.40, 1_050_000),
+            ("1:1100000:A:C", 0.45, 1_100_000),
+        ]
+        write_ld_block(ld_panel / "EUR" / "1", "900000-1300001", variants, seed=0)
+    else:
+        variants = [
+            ("1:1000000:A:G", 0.30, 1_000_000), ("1:1050000:C:T", 0.40, 1_050_000),
+            ("1:1100000:A:C", 0.45, 1_100_000),
+        ]
+        write_ld_block(ld_panel / "EUR" / "1", "1000000-1100000", variants, seed=2)
+    blocks = list_all_blocks(ld_panel, "EUR", "1")
+    assert [len(b.snp_ids) for b in blocks] == [len(variants), 5]  # fixture first
+    assert shared_endpoints(blocks) == {}
+    dst = tmp_path / "comp.opengwasdb"
+
+    complete_dense_store(
+        observed_store, dst, PanelSource(ld_panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp-v1"),
+    )
+
+    assert _cell(dst, "1:1050000:C:T", 0)[1] == int(agree)  # meaningful before compared
+    declared, masked = declared_and_masked(dst / "analyses.tsv", dst)
+    assert masked == [int(agree), 0]
+    assert declared == masked
 
 
 def test_a_candidate_with_no_usable_se_is_not_a_fill(monkeypatch: pytest.MonkeyPatch):
@@ -2157,3 +2343,121 @@ def test_a_candidate_with_no_usable_se_is_not_a_fill(monkeypatch: pytest.MonkeyP
     assert result.pearson_r == 0.9
     assert [fill[0] for fill in result.fills] == [2]
     assert result.n_missing == 1
+
+
+
+def _completion_record(store: Path) -> dict:
+    return open_store(store).manifest.provenance["completion"]
+
+
+class TestLdPanelIdentity(checks.PanelIdentityTests):
+    """A completion records the panel it read, not a constant (#327)."""
+
+    @pytest.fixture
+    def ways(self, observed_store, monkeypatch):
+        """The three callables `panel_identity_checks` runs a Dense completion through."""
+
+        def complete(dst, panel, name=None):
+            return complete_dense_store(
+                observed_store, dst, PanelSource(panel, ancestry="EUR", name=name),
+                CompletionOptions(min_cor=0.0),
+            ).output_path
+
+        interrupt = checks.interrupting(complete, complete_module, monkeypatch)
+        return complete, interrupt, resume_dense_completion
+
+    def test_the_cli_records_the_path_as_typed(
+        self, tmp_path, observed_store, ld_panel, monkeypatch
+    ):
+        from typer.testing import CliRunner
+
+        from opengwasdb.cli.main import app
+
+        monkeypatch.chdir(ld_panel.parent)
+        typed = f"./{ld_panel.name}/"
+        dst = tmp_path / "typed.opengwasdb"
+        done = CliRunner().invoke(
+            app,
+            ["complete-dense", str(observed_store), str(dst), "--ld-panel", typed,
+             "--min-cor", "0.0"],
+        )
+        assert done.exit_code == 0, done.output
+        assert _completion_record(dst)["ld_panel_path"] == typed
+
+    def test_the_cli_refuses_a_blank_panel_name(self, tmp_path, observed_store, ld_panel):
+        from typer.testing import CliRunner
+
+        from opengwasdb.cli.main import app
+
+        refused = CliRunner().invoke(
+            app,
+            ["complete-dense", str(observed_store), str(tmp_path / "x.opengwasdb"),
+             "--ld-panel", str(ld_panel), "--ld-panel-id", " "],
+        )
+        assert refused.exit_code == 2
+        assert "empty" in refused.output
+        assert not (tmp_path / "x.opengwasdb").exists()
+
+
+class TestCompletionRecordMerge:
+    def test_a_source_completion_record_is_merged_not_replaced(
+        self, tmp_path, observed_store, ld_panel
+    ):
+        path = observed_store / "manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest["provenance"]["completion"] = {"carried_from_source": 1}
+        path.write_text(json.dumps(manifest))
+        result = complete_dense_store(
+            observed_store, tmp_path / "a.opengwasdb", PanelSource(ld_panel, ancestry="EUR"),
+            CompletionOptions(min_cor=0.0),
+        )
+        record = _completion_record(result.output_path)
+        assert record["carried_from_source"] == 1
+        assert record["ld_panel_digest"]
+
+
+class TestLdPanelProvenanceRule:
+    """`completion.ld_panel` and `completion.ld_panel_unrecorded` (spec §20.0)."""
+
+    @staticmethod
+    def _rewrite(store: Path, change) -> None:
+        path = store / "manifest.json"
+        manifest = json.loads(path.read_text())
+        change(manifest["provenance"]["completion"])
+        path.write_text(json.dumps(manifest))
+
+    @staticmethod
+    def _said(store: Path, rule: str) -> dict[str, list[str]]:
+        result = validate_store(store)
+        return {
+            "errors": [e for e in result.errors if rule in e or "ld_panel" in e],
+            "warnings": [w for w in result.warnings if "ld_panel" in w],
+        }
+
+    def test_a_completion_that_records_its_panel_passes_clean(self, completed_store):
+        assert _completion_record(completed_store)["ld_panel_digest"]
+        assert self._said(completed_store, "completion.ld_panel") == {"errors": [], "warnings": []}
+
+    def test_a_missing_field_is_an_error(self, completed_store):
+        self._rewrite(completed_store, lambda c: c.pop("ld_panel_digest"))
+        said = self._said(completed_store, "completion.ld_panel")
+        assert any("records no ld_panel_digest" in e for e in said["errors"]), said
+
+    def test_an_id_its_digest_does_not_derive_is_an_error(self, completed_store):
+        assert _completion_record(completed_store)["ld_panel_id_source"] == "digest"
+        self._rewrite(completed_store, lambda c: c.update(ld_panel_id="sha256:0123456789abcdef"))
+        said = self._said(completed_store, "completion.ld_panel")
+        assert any("is not the id its digest derives" in e for e in said["errors"]), said
+
+    def test_a_completion_written_before_the_fields_is_a_warning_only(self, completed_store):
+        """What a completion before #327 records: `ld_panel_id` alone, the constant."""
+
+        def as_before(completion):
+            for key in [k for k in completion if k.startswith("ld_panel_")]:
+                del completion[key]
+            completion["ld_panel_id"] = "eur-hg38-gpm"
+
+        self._rewrite(completed_store, as_before)
+        result = validate_store(completed_store)
+        assert any("none of the LD panel fields" in w for w in result.warnings), result.warnings
+        assert not [e for e in result.errors if "ld_panel" in e], result.errors

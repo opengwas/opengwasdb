@@ -54,7 +54,7 @@ for _path in (REPOSITORY / "tests", REPOSITORY, BUNDLE):
         sys.path.insert(0, str(_path))
 
 #: The bundle's own version: raised whenever a release or an expected answer changes.
-BUNDLE_VERSION = "3"
+BUNDLE_VERSION = "4"
 #: The `format_version` every release of the bundle is.
 FORMAT_VERSION = "0.3.0"
 #: What `normalise` stamps in place of each build's time, version and build root.
@@ -541,9 +541,14 @@ def generate_bundle(out: Path) -> None:
     unpinned = {k: os.environ.get(k) for k, v in PINNED_ENVIRONMENT.items()
                 if os.environ.get(k) != v}
     assert not unpinned, f"the bundle is generated in {PINNED_ENVIRONMENT}, not {unpinned}"
-    with tempfile.TemporaryDirectory() as scratch:
+    from tests.assembly_gap_fixtures import grch38_without_gaps
+
+    with tempfile.TemporaryDirectory() as scratch, tempfile.TemporaryDirectory() as table:
         root = Path(scratch)
-        write_bundle(build(root), root, out)
+        # The bundle's synthetic rows sit at positions like `1:1000`, in GRCh38's first
+        # gap; like the suite's, they read the gap-free test table (#410).
+        with grch38_without_gaps(Path(table)):
+            write_bundle(build(root), root, out)
 
 
 def main(argv: list[str]) -> None:

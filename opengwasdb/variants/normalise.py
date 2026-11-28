@@ -41,6 +41,17 @@ class LiftedOffPrimary(MalformedIdentity):
     reason = "lift_off_primary"
 
 
+class HmUnplaced(MalformedIdentity):
+    """A GWAS Catalog row its harmoniser could not place (#410): in the pre-GWAS-SSF
+    layout, `hm_code` 14 ("Required fields are not known"), 15 ("No matching variants
+    in reference VCF") or 16 ("Multiple matching variants in reference VCF"). Its
+    main-column position is the submitter's, which on real files is often a GRCh37
+    position or one on an alt or random scaffold, so it names no variant and is
+    dropped."""
+
+    reason = "hm_unplaced"
+
+
 class UndeclaredReference(MalformedIdentity):
     """An indel whose source declares neither allele the genome's reference.
 
@@ -84,6 +95,8 @@ class ReferenceDeclaration(Protocol):
     def fault(self) -> type[UndeclaredReference]: ...
 
     def of_row(self, row: Mapping[str, str | None]) -> bool: ...
+
+    def unplaced_row(self, row: Mapping[str, str | None]) -> bool: ...
 
 
 @dataclass
@@ -366,7 +379,9 @@ def orient_or_drop(
     """`orient_to_canonical`, or ``None`` for a row that names no variant.
 
     Whether the other allele is the reference is ``declaration``'s answer for
-    ``row``, the row as a mapping of its header's names to its cells. An indel
+    ``row``, the row as a mapping of its header's names to its cells, and so is
+    whether its harmoniser placed it at all: a row it did not place is dropped as
+    `HmUnplaced` before anything else is judged (#410). An indel
     whose reference is undeclared is recorded under the declaration's fault,
     whose reason names why its source declares none (a GWAS-SSF layout).
 
@@ -380,6 +395,7 @@ def orient_or_drop(
     source_effect_allele = source_effect_allele or ""
     source_other_allele = source_other_allele or ""
     try:
+        _refuse_unplaced(declaration, row)
         return orient_to_canonical(
             chromosome,
             position,
@@ -394,6 +410,12 @@ def orient_or_drop(
         return None
     except VariantNormalisationError:
         return None
+
+
+def _refuse_unplaced(declaration: ReferenceDeclaration, row: Mapping[str, str | None]) -> None:
+    """Refuse ``row`` as `HmUnplaced` if its harmoniser placed it nowhere (#410)."""
+    if declaration.unplaced_row(row):
+        raise HmUnplaced("its harmoniser placed it nowhere")
 
 
 def _named(fault: MalformedIdentity, undeclared: type[UndeclaredReference]) -> MalformedIdentity:

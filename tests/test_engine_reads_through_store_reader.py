@@ -110,9 +110,6 @@ WRITER_FUNCTIONS = {
     ("opengwasdb/layouts/ragged/complete.py", "_write_top_hits_and_analyses"): (
         "rolls up the completion_quality rows it staged"
     ),
-    ("opengwasdb/layouts/hybrid/complete.py", "_correct_crossover_quality"): (
-        "corrects the completion_quality of the Dense Component it is completing"
-    ),
     ("opengwasdb/layouts/dense/indexed_subsets.py", "_validate_staged"): (
         "checks the subset group it staged before publishing it"
     ),
@@ -140,7 +137,8 @@ COMPLIANT_ARRAYS_CALLS = frozenset(
         ("opengwasdb/layouts/dense/complete.py", "_run_completion"),
         ("opengwasdb/layouts/dense/complete.py", "_dense_shard_rows"),
         ("opengwasdb/layouts/dense/rho.py", "build_dense_rho"),
-        ("opengwasdb/layouts/hybrid/complete.py", "_crossover_cells"),
+        ("opengwasdb/layouts/hybrid/complete.py", "_crossover_status"),
+        ("opengwasdb/layouts/hybrid/complete.py", "_overwritten_se_counts"),
         ("opengwasdb/store/legacy_conversion.py", "_grid"),
         ("opengwasdb/store/legacy_conversion.py", "_rounded_se"),
         ("opengwasdb/store/legacy_conversion.py", "_refuse_other_planes"),

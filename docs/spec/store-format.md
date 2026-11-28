@@ -351,7 +351,8 @@ tells from the header (ADR 0079):
   indel on a row of any other code is dropped as `indel_ssf_hm_code`;
 - where the study's alleles are the main columns and the harmonised ones are
   `hm_other_allele`/`hm_effect_allele`, every indel is dropped as
-  `indel_ssf_hm_columns`;
+  `indel_ssf_hm_columns`, and so is every row whose `hm_code` is 14, 15 or 16,
+  as `hm_unplaced` (below);
 - where the file carries no harmoniser column, every indel is dropped as
   `indel_ssf_unharmonised`;
 - a file with any other mix of harmoniser columns is refused.
@@ -386,14 +387,119 @@ not `off_axis`; a reference extracted before #376 may still route a lifted row
 onto an alt contig, and the build drops that row and its ALID, and counts the row
 the same way. The release records the lift by `source_alid`, which `validate`
 judges (`variant_table.lifted_contig`, §20.0): it names the contig a lifted
-variant came from, and a row whose `source_alid` was blanked by a collision is not
-judged, so a release can be checked for the drop only where that column survives. A
+variant came from, and a row whose `source_alid` was blanked by a collision (a release
+built before #325) is not judged, so a release can be checked for the drop only where that column survives. A
 plain ALID list, or another Store's variant table, used as a Variant Reference
 records no source keys: the build keeps an alt-contig ALID it holds, as a GRCh38
 source's variant, and its row stays empty in the release, which
 `variant_table.lifted_contig` passes because the row's `source_alid` is the ALID itself.
 A release rebuilt from a published axis therefore holds the axis's alt-contig
 variants, with no associations, until the axis is rebuilt from the sources.
+
+**A lift collision drops every lifted source it reaches (#325).** Two source loci, each a
+source `(chromosome, position)`, that a lift puts on one ALID are a collision: a chain
+is not injective, and one hg19 position can map onto the hg38 position of another, on
+either strand. A build MUST drop every lifted source variant of such an ALID from every axis
+it builds and MUST NOT merge one source's statistics, rsID or `source_alid` with another's,
+nor keep one of them on the ALID by order of reading, since which one owns it is not
+knowable from the chain. The ALID is not stored on their account. One locus's alleles
+reported either way round (`A:G` and `G:A` at one position) are one variant, which the
+canonical ALID already merges, and are not a collision. The rule holds the lifted group to
+itself: a source already on the release's assembly that names the ALID is one variant seen
+from another build, as before (§4's `source_alid` ambiguity), and keeps it. Every builder
+that lifts applies the rule through the one placement (`place_sites`, which `place_union`,
+the fold's off-reference lift and `build-ragged-ssf` call), and `place_sites` refuses to
+return a lifted group with two loci on one ALID. A dropped site is still a lifted locus for the
+both-assemblies rule: a GRCh38 source that spells its key is dropped with it, so no
+dropped source's statistics route onto another row by its raw key. A build routed by
+a Variant Reference records the collisions its harvest's lift finds (every such build
+harvests, #258), and counts the rows of those the reference does not route. A Variant Reference
+artifact is checked when it is read for routing: an ALID it routes from two or more lifted
+source loci loses all of those source keys, which are dropped and recorded
+as a lift collision is, and the ALID stays on the axis with no source key reaching it
+(#260). A key is lifted when it is not at its ALID's own `(chromosome, position)`, since a
+GRCh38 key always is; when every source of the build is hg19, every key is. The artifact
+does not say which assembly spelled a key at that locus, so in a mixed manifest one that
+shares its ALID with a moved key is lifted where the build's chain, reading its coordinate
+as hg19, leaves it in place, and is a GRCh38 key where the chain places it elsewhere or
+nowhere. An extraction made before #260 may hold such an ALID. `extract-variant-reference` applies the rule itself, held to the lifted sites, once every site of an ALID has met in its post-lift window: each lifted source of a collided ALID is left out of the artifact and returned, with its ALID and own rsID, and a lifted site the both-assemblies rule drops still collides there, as in `place_union`. The artifact records no dropped key, so a build that reads it finds the collision again by its harvest's lift, and counts those sources' rows `lift_collision`. Every build counts the rows of
+a site its routing dropped in Pass 2, the Hybrid fold included: a fold never meets one of
+them alone, to place it on the ALID. A reference with no source keys routes an hg19 source
+through `place_union` (below), so the rule reaches it as it reaches a two-pass build. Each dropped source is recorded by both identities, in
+`lift_collisions.tsv` beside the Admission record's `admission.json` (`target_alid`,
+`source_key`, `rsid`, one row per source the build dropped rows of, never one it merely found colliding; the source key is spelled as its source wrote it, and the rsID is the one its own hg19 sources named it, empty where they named none, never a GRCh38 source's. The Hybrid fold's spill keeps a key upper-cased, so it takes both from what its harvest's lift recorded for that source, and refuses a site that lift did not drop; every reference is harvested, one that names its own rsIDs included, so no build records a named source with an empty rsID (#258)), and each row of it is dropped,
+logged by source key and counted, per Analysis, as `lift_collision` (or, for a row of a source already on the Store's assembly that spells a dropped site's key, `lift_ambiguous`) (Admission rules
+`admission/15`; the Hybrid fold's, in its `fold` stage, which since #258 is a guard only:
+every Variant Reference is harvested, so Pass 2 drops each collided row by its key and no
+build is known to reach the fold's own collision check; `build-ragged-ssf`'s, in its own gate,
+and counted by neither `n_unmapped` nor a manifest field). There is no `validate` rule: a Store
+holds only the ALIDs that survived, and cannot say which source loci were dropped, so the
+guarantee is the build's. A release built before #325 may hold such an ALID, with its
+`source_alid` blank and the statistics of one source under the rsID of the other.
+
+**A Variant Reference with no source keys lifts an hg19 source (#260).** A plain ALID
+list or a Store Variant Table names hg38 ALIDs and no source coordinates, so it can route
+a row by identity only where the row's own `(chromosome, position, ref, alt)` is its hg38
+ALID: a GRCh38 source's. A single-pass build given one, with any hg19-declared source,
+MUST NOT route that source's rows by identity, since an hg19 coordinate that is also an
+ALID on the list is another locus. It routes every source site as the two-pass build
+does: Pass 1 reads the sources, `place_union` lifts the hg19 group with the build's chain
+and `--liftover-failure-threshold` (a failure rate above it refuses the build; below it,
+each failed row is dropped and counted `off_axis`), applies the lift-collision and
+both-assemblies rules, and passes GRCh38 sites through. The reference stays the axis
+and decides which ALIDs exist. A site placed on an ALID the reference does not list is
+handled as the two-pass build handles an off-panel variant: in `build-hybrid` it goes to
+the Ragged Overflow before Pass 2 and nothing is folded, so the release is the one
+`--reference-panel` with the same list builds, Ragged Overflow included; in
+`build-dense-vcf` its rows are dropped and counted `off_axis`, so the release is the
+two-pass release restricted to the reference's ALIDs, with each listed ALID no source
+reaches stored empty. Names follow the two-pass rule (the first rsid of the sites placed
+on each ALID), save that a variant the reference names takes the reference's name (#258,
+below). A manifest of GRCh38 sources alone is routed by identity, as before; Pass 1 still
+reads its sources, for their names and to say which ALIDs one observed, the only rows
+with a `source_alid` (#261, below). A source declared under any other assembly is
+refused, since neither identity nor the lift places it.
+
+A GWAS Catalog row its harmoniser placed nowhere names no variant (#410). In the
+layout that keeps the study's alleles in the main columns, a row whose `hm_code`
+is 14 ("Required fields are not known"), 15 ("No matching variants in reference
+VCF") or 16 ("Multiple matching variants in reference VCF") has `NA` in every
+`hm_*` column, and its main-column position is the submitter's: on real files a
+GRCh37 position never lifted, or a position on an alt or random scaffold written
+under the primary chromosome's label (`1:5` was `chr4_GL000008v2_random:5`).
+Every reader drops such a row, whatever its alleles, and none reads it at the
+submitter's position. Only a Store builder counts it: its Admission record logs
+it as `hm_unplaced`. `resolve`, which builds no Store, reads the metrics
+projection, which leaves such rows out uncounted, as it leaves out a malformed
+identity, so a resolved Analysis's totals do not include them.
+The palindrome codes 9, 17 and 18 place their row, which is kept as before.
+
+A Store holds no variant where its assembly has no sequence (#410). GRCh38's
+assembly gaps are its runs of two or more `N`: every chromosome's first 10,000
+or more bases, each centromere, the short arms of 13, 14, 15, 21 and 22. Nor does
+it hold one past its contig's last base. A single `N` is not a gap: UCSC's FASTA
+writes each IUPAC ambiguity code as `N`, and real variants sit on them
+(`17:83128871:G:T`). The package holds the table, 786 gaps and the 25 primary
+contigs' lengths, as `opengwasdb/variants/grch38-assembly-gaps.tsv`, derived from
+UCSC's `hg38.fa.gz` by `scripts/derive_grch38_assembly_gaps.py`, whose header
+names the FASTA's sha256. Every builder drops a row of a source on GRCh38
+placed in a gap or past its contig's end, logs it, per Analysis, as
+`in_assembly_gap` or `past_contig_end`, and holds its variant on no axis;
+`validate` fails a release that holds one (`variant_table.assembly_gap`, §20.0).
+A lifted row is judged after the lift, at the coordinate the lift placed it on,
+since Admission sees its source coordinate: a lift that lands in a gap or past its
+contig's end does not place the row, which is dropped, logged and counted, per
+Analysis, as `in_assembly_gap` or `past_contig_end`, as a lift onto an alt contig
+is counted `lift_off_primary`. The one judgement of a lift's result
+(`split_lifted`) is called by every path that lifts: `place_union`, the Hybrid
+fold's off-reference lift, the unmatched rows a single-pass `build-dense-vcf`
+lifts to say why, `extract-variant-reference` (which leaves such a site out of the
+artifact and logs how many), `build-ragged-ssf` and `build-ragged-besd`. A lift
+can land there: the hg19-to-GRCh38 chain aligns 2,372 bases, in 14 runs of 9 of
+its 52,571 primary-contig blocks, into gaps, and none past an end.
+`variant_table.assembly_gap` stays the backstop, for a release built before this
+and for a Variant Reference extracted before it, which may still route a lifted
+row into a gap.
 
 A build that lifts a source variant from another Reference Assembly MUST project
 the variant onto the release's assembly using the chain block's orientation: on a
@@ -478,9 +584,11 @@ reference warns and is recorded as unchecked rather than passing as verified.
 That release's `manifest.json` `provenance.lift` records the source Reference
 Assembly, the chain, the reference (or `null` when none was supplied) and the
 verified / other-variant / absent counts (issue #284, ADR 0062), `n_lifted`
-(the sites the chain mapped, those it placed off the primary assembly included) and
-`n_off_primary` (those sites, which §4 leaves out and the Admission record counts as
-`lift_off_primary`).
+(the sites the chain mapped), `n_off_primary` (those it placed off the primary
+assembly, which §4 leaves out and the Admission record counts as `lift_off_primary`)
+and `n_outside_sequence` (those it placed in a GRCh38 gap or past a contig's end,
+counted as `in_assembly_gap` or `past_contig_end`, #410): `n_lifted` is the sites it
+placed plus those two.
 
 A lift that lands two ESI entries on one canonical variant is ambiguous, and
 MUST be dropped, not resolved: a source of 9,000,000 rows cannot fail the way
@@ -515,17 +623,21 @@ Analysis, as `lift_unmapped` (the chain places the site nowhere),
 `lift_ambiguous` (a Routing Key that a lifted source and a source already on
 GRCh38 both declare: two loci that share a string, dropped from the Analyses of
 both, as Pass 1's union drops it). Two source sites that lift onto one variant
-are one Analysis's duplicate rows, and the duplicate rule resolves them. A
+are not one Analysis's duplicate rows: they are two variants (a lift collision),
+and every row of both is dropped and counted as `lift_collision`. A
 lifted Store records `provenance.lift` as `build-ragged-besd` does, with
 `n_unmapped`, `n_off_primary` (sites lifted onto an alt, random or unplaced
-contig, counted as `lift_off_primary` and left out) and `n_ambiguous` (Routing
-Keys) beside `n_lifted` (the sites the chain mapped, those off the primary assembly
-and the ambiguous ones included), and `reference: null`: the lift is not checked against a Variant Reference. A Store
+contig, counted as `lift_off_primary` and left out), `n_outside_sequence` (sites
+lifted into a GRCh38 gap or past a contig's end, counted as `in_assembly_gap` or
+`past_contig_end` and left out) and `n_ambiguous` (Routing Keys) beside `n_lifted`
+(the sites the chain mapped: those it placed, the ambiguous and collided ones
+among them, plus `n_off_primary` and `n_outside_sequence`; `n_unmapped` is apart),
+and `reference: null`: the lift is not checked against a Variant Reference. A Store
 whose sources are all on GRCh38 records no `provenance.lift`. A build with any
 non-GRCh38 source holds every Analysis's admitted rows in memory until the lift
 has placed them; a GRCh38-only build reads one Analysis at a time. A lift that
 leaves no variant refuses the build, naming each Analysis's `lift_unmapped`,
-`lift_ambiguous` and `lift_off_primary` counts, after the Admission record is finished.
+`lift_ambiguous`, `lift_off_primary` and `lift_collision` counts, after the Admission record is finished.
 
 Cross-Store identity is:
 
@@ -567,7 +679,7 @@ is part of the contract (issue #255):
 - A routing key spells a coordinate's alleles upper-cased, as identity does
   (above), so source coordinates spelt in different case are one stored
   variant on every build. Every build that harvests — a two-pass build, or a
-  single-pass build whose reference names no variants — compares the names
+  single-pass build, whatever its reference names (#258) — compares the names
   those spellings carry, by one rule, and so does Variant Reference extraction
   (issue #379), and so do `build-ragged-ssf` and `build-dense` over the rows
   they admit: when
@@ -595,7 +707,12 @@ is part of the contract (issue #255):
   its distinct names in `(rank, site)` order. A build that compared names and
   found none disputed — even one whose sources name nothing — reports `0` and
   `0`. `n_keys` and `n_variants` are `null`, never `0`, for a build that
-  compared no names across sources: one whose reference names its variants. A
+  compared no names across sources: a release built before #258 from a reference
+  that named its variants, or a resume of a checkpoint that predates the option
+  (below). A variant a disputed key reaches that the reference names keeps the
+  reference's name under `drop` (below), and is not counted in `n_variants`;
+  under `refuse` the dispute still fails the build, since the sources' names are
+  compared whichever name is stored. A
   checkpointed build records the policy and the counts, and resuming it under
   the other policy is refused. A resume past the fold does not harvest again, so
   one whose recorded counts are missing is refused too, unless its checkpoint
@@ -614,8 +731,9 @@ is part of the contract (issue #255):
   that canonicalise to one variant are both dropped, with their associations,
   so no two names ever meet there.
 - A single-pass build given `--variant-reference` MUST NOT write a `rsid`
-  column blank simply because the reference it was given is a plain ALID list.
-  When the reference names none of its variants, the build runs the same Pass 1
+  column blank simply because the reference it was given is a plain ALID list,
+  or names only some of its variants (#258). Whatever the reference names, the
+  build runs the same Pass 1
   harvest the two-pass build runs for its candidates and their `(rank, site)`
   order, keys those candidates with **exactly the key normalisation the build's
   own association routing uses** (alleles upper-cased, allele order kept),
@@ -625,38 +743,57 @@ is part of the contract (issue #255):
   always lands on the ALID its association lands on and the global first
   candidate in `(rank, site)` order wins, whichever partition routed it. Where
   Pass 1's own liftover would have chosen a different ALID, the reference wins
-  and the disagreement is logged. When the reference carries its own rsids (a
-  full `*.variant-ref.tsv.gz` artifact or a Store Variant Table), it is the axis
-  authority and its names are used as given; a variant the reference does not
-  name is then written with no rsid, even when a source names it, and the build
-  warns with counts of the rows it leaves blank (the reference's own unnamed
-  rows and the fold-discovered Overflow rows separately). A reference that
-  already names rsids therefore predates this contract, and no rule below is
-  claimed for that path — an artifact extracted from the same sources names
-  every one of them, which is the supported way to keep a reference-named
-  axis and the sources' identifiers together.
-- For a store whose reference names no rsids, the resulting names are identical
-  to the two-pass build's **for every variant both axes carry**. The axes
+  and the disagreement is logged.
+- **A reference's own names win, and the harvest fills the rest (#258).** When
+  the reference carries rsids (a `*.variant-ref.tsv.gz` artifact or a Store
+  Variant Table), a variant it names MUST be written with the reference's
+  name, whatever its sources call it; the build counts the variants whose
+  sources name them otherwise in a warning, and does not refuse them, since a
+  curated reference may rename. Every variant the reference leaves unnamed —
+  its own unnamed rows, and a Hybrid build's fold-discovered Overflow rows —
+  MUST take the harvest's name by the rule above, exactly as if the reference
+  named nothing. The reference's names are applied to the one rekeyed map, so
+  the Store Variant Table and the rsid search index carry them. An
+  artifact extracted from the same manifest names every variant its sources
+  name, by the same first-name rule, so its names are stored unchanged. The
+  harvest is Pass 1 in full: every source's variants are read, and an hg19
+  source's are lifted with the build's chain under `--liftover-failure-threshold`,
+  so a build against a named reference that passed before #258 can now refuse
+  on that threshold, and a dispute among its sources refuses under `refuse`
+  even at a variant the reference names. It is not cheap: a build that used to
+  read no source pays it, measured on OGS-00004 (nine GWAS-SSF Analyses, 20 M
+  source variants, serial) at about 13.5 min of a 44 min build, some 30 %, and on
+  OGS-00005 at about 7 min of 31. A release built
+  before #258 from a reference that named some rsids wrote every variant it
+  left unnamed with no rsid, even where a source named it.
+- Whatever its reference names, the resulting names are identical to the
+  two-pass build's **for every variant both axes carry**, save that a variant
+  the reference names carries the reference's name. The axes
   themselves need not be identical, and one difference is expected: the
   single-pass axis is the reference plus the off-reference variants its sources
   actually observe, while a two-pass `--reference-panel` axis also keeps a
   source variant that has no usable association anywhere. Such a variant is
   absent from the single-pass release rather than present under a wrong name,
-  and both releases answer alike every query the two axes share.
-- A build that harvests (that is, a build whose reference names none of its
-  variants, or a two-pass build) MUST fail rather than publish a variant table
-  that disagrees with the rsids the sources named. Two checks run before
+  and both releases answer alike every query the two axes share. A Hybrid build
+  whose reference has no source keys and whose manifest has an hg19 source
+  routes as the two-pass build does (#260, above), so its axis is the
+  `--reference-panel` axis, that variant included.
+- A build that harvests (every single-pass build, and a two-pass build) MUST
+  fail rather than publish a variant table that disagrees with the rsids the
+  sources and its reference named. Two checks run before
   publication: the resolved ALID → rsid map is compared exactly with an
-  independently computed expectation — the raw harvest candidates walked
+  independently computed expectation — the reference's own names first, ahead
+  of every source, then the raw harvest candidates walked
   through the build's own key function over the *same final combined* routing,
   first non-empty per ALID, and under `--on-rsid-conflict drop` with every ALID
-  that a routing key it finds named differently reaches expecting no name — so a
+  that a routing key it finds named differently reaches expecting no name unless
+  the reference names it — so a
   wrong value, a missing entry, a key-normalisation collapse that keeps the wrong
-  name, a disputed variant left named, or an extra entry fails;
+  name, a disputed variant left named, a reference name lost or overridden, or
+  an extra entry fails;
   and the written table is read back row for row against that map, so a stale
-  map or a table lost in the write fails too. Neither check runs on the
-  reference-named path above. A release whose sources genuinely name no variants
-  is valid, and builds normally — neither check can fire for it.
+  map or a table lost in the write fails too. A release whose sources genuinely
+  name no variants is valid, and builds normally — neither check can fire for it.
 
 Every Store Release assigns compact Store-local Variant Indices. Variant Indices MUST NOT be assumed stable across releases or stores.
 
@@ -793,8 +930,28 @@ chromosome's ranges from another's rows, or from none.
 for a lifted row the pre-liftover ALID, for a row its source already placed on the
 release's assembly its own ALID. A row two source variants collided onto (§4 above,
 #85) has none, and so has a row Reference Completion added from the panel, which no
-source observed. Three plain `.npy` files, memory-mappable and read with numpy
-alone, hold it:
+source observed. **Only a row some source observed has one (#261).** A build MUST NOT
+write a `source_alid` for a row no source observed: a single-pass build routed by a
+Variant Reference with no source keys (a plain ALID list, a Store Variant Table) holds
+every ALID the reference lists, and writes `.` for each that no source supplied, as the
+two-pass `--reference-panel` build writes for a panel row no Analysis observed, so the
+two write the same table. To know which, it reads its sources (Pass 1) even when the
+reference names its rsIDs; an observed row's `source_alid` is the own coordinate of the
+source sites that reached it by the routing Pass 2 uses (matched by Routing Key, or
+lifted, #260), never the reference's identity. An extraction artifact's source keys
+are coordinates its sources supplied, and are its rows' `source_alid` as before.
+`build-dense-vcf` and `build-hybrid` refuse a map they are about to write that names a
+`source_alid` no source supplied (`require_observed_provenance`). The check is kept apart
+from what it checks: it reads the coordinates recorded from the sites read (Pass 1's
+union, an artifact's source keys, the Hybrid fold's resolved keys:
+`SuppliedCoordinates`), never the routing's record of what was observed, so a fault in
+that record is refused too; `build-hybrid` checks the map after the fold merges in the
+off-reference origins, the one it writes; and a plain reference whose routing records
+no observation is refused outright. There is no `validate` rule: a release cannot tell an unobserved row from an observed one whose every
+association Admission dropped, which also holds none. A release built before #261 from
+a plain reference (OGS-00005's 8 Oct 2026 rebuild: 600,977 Dense Component rows) names
+such rows by their own ALID. Three plain `.npy` files, memory-mappable and read with
+numpy alone, hold it:
 
 | file | dtype | length | holds |
 |---|---|---|---|
@@ -1016,22 +1173,30 @@ components share one decision, and each must save bytes on its own.
 **Reference Completion keeps its source's SE model** (ADR 0078, issue #301).
 A completed release declares its source's `kind` and `residual_range` (ADR
 0038 §4), and every cell it holds is coded against the source's
-`se_coefficients`, which it carries unchanged. Dense and Hybrid completion
-patch the source's plane, so its codes carry over. Ragged completion rewrites
-its whole CSR plane from decoded values, and it never refits the model: a
+`se_coefficients`, which it carries unchanged. Every layout re-encodes each
+observed cell from its decoded source value, and never refits the model: a
 model fitted to the completed rows decodes each observed code to a value the
 source never held. Each observed cell is held exactly: its code decodes to the
 source's value, and one whose code would decode to anything else is an exact
 exception. For example, a source exception whose `float32` value rounds back
 inside the range stays an exception. So the source's exceptions carry over
-with their values. An imputed cell is coded against the same model, and one
+with their values. The rule is the same for a residual `eaf` plane (issue #390):
+an observed frequency whose code would decode, by the one EAF decoder, to a
+`float32` other than the source's is an exact exception in `eaf_exception_*`,
+and one already on a code's value keeps the code, so the exceptions a
+completion adds are the cells the source's own exceptions put off the grid. A
+Hybrid crossover fold is not like that: it codes the Ragged Overflow's observation
+against the Dense Component's baseline and model, not the Ragged source's, so a
+crossover that was an ordinary code under the source's is usually off the grid
+under the Component's, and most folded cells become exceptions. The fold carries
+them (the same rule), so each reads back as the source did. An imputed cell is coded against the same model, and one
 whose residual falls outside the range is an exact exception, like any other.
 
 The 2% budget is the criterion a build uses to choose its range, and
 completion does not choose again. Imputed cells may take an Analysis past
 2%. Completion never brings it back under by refitting or by writing
 `float16`: either would change observed values that §12 says completion
-preserves. Instead a Ragged completion records each Analysis's share in
+preserves. Instead a Ragged, Dense or Hybrid completion (Hybrid in its Dense Component's manifest, counting the release's final cells: the Dense pass less the cells the crossover fold overwrote, plus the fold's own; issue #390) records each Analysis's share in
 `manifest.json`'s `provenance.completion.se_exceptions` and logs a warning
 naming every Analysis above the budget. `validate` does not check the budget:
 it bounds side-table bytes, not accuracy. The block holds:
@@ -1307,6 +1472,11 @@ n_missing_se_out_of_range   (associations not stored for an SE above 65,504; req
 eaf_orientation      (see §9.1; `passed`, `failed` or `unverified`; blank only on a store built before the check existed)
 eaf_orientation_r    (the observed correlation; blank when none was computed)
 eaf_orientation_n    (variants the correlation was computed over)
+effect_consistency   (see §9.2; `passed` or `skipped` on every row; all five columns are present on a release built since #510, none on one built before)
+effect_consistency_reason             (when skipped, one of `no_source_p_value`, `all_se_from_p_value`, `too_few_rows`, `joint_test_p_value`; blank on a pass)
+effect_consistency_median_abs_delta   (finite float: median |log10 p implied − log10 p reported|; blank when skipped)
+effect_consistency_median_delta       (finite float: the median signed difference; blank when skipped)
+effect_consistency_n                  (positive integer: source rows the medians were taken over; blank when skipped)
 n_hits_5e8   (count of associations at p <= 5e-8, genome-wide significant)
 n_hits_5e6   (count of associations at p <= 5e-6, suggestive)
 n_hits_5e4   (count of associations at p <= 5e-4, nominal)
@@ -1405,6 +1575,18 @@ none, never "nothing was dropped" — so a legacy manifest's release records
 exactly what it did before this filter existed. A policy may be `unavailable` or
 `disabled` for some Analyses of a table and `filtered` for others; every entry
 appears whenever the threshold column is present at all.
+
+A build-input manifest MAY carry `p_value_test`, per Analysis, declaring which
+test its source's p-value comes from (ADR 0085): `wald_1df`, `joint_2df` or
+`mr_mega`. Every builder that checks effect consistency (§9.2) reads it: a
+`joint_2df` Analysis is recorded `skipped: joint_test_p_value`, since a joint
+2-df p cannot witness the stored coefficient; an `mr_mega` Analysis is refused
+unread, since MR-MEGA's `beta/se` is a t-statistic, not a z; a `wald_1df`
+Analysis is checked. The column is optional in a build-input manifest, unlike the
+resolver's, where every row declares one: an Analysis with no column or a blank
+cell is checked as `wald_1df`, and if its p is a joint test after all the build
+is refused naming the declaration that would skip it. Any other value refuses the
+build, naming its Analysis.
 
 `analyses.tsv` MUST be sufficient on its own to interpret every Analysis's stored
 effect scale, sample-size semantics, ancestry, and licensing/citation terms —
@@ -1630,6 +1812,48 @@ of the difference: a bottlenecked cohort's frequencies legitimately differ from
 a reference panel's by three orders of magnitude (FinnGen, max log-residual
 8.07) while still correlating at r = +0.995, because a bottleneck changes
 magnitudes, not direction.
+
+### 9.2 Each stored z is checked against its source's p-value, and the check is recorded
+
+Nothing in a row can tell an odds ratio from a log-odds ratio: both are finite
+numbers, and a `beta` column holding odds ratios beside a log-scale standard error
+gives a z that is wrong by a scale on every row and plausible on none looked at
+alone. The source's own p-value is the witness (ADR 0069). Every build compares
+`z = beta / se` with it on each Analysis's source as its first read of the sources,
+before it lifts, routes or writes anything, and refuses the build naming every
+Analysis whose effect contradicts it: the median of
+`Δ = log10 p_implied − log10 p_reported` over a bounded sample of the source's
+first 1,000,000 rows (after Association Admission) has `|Δ|` above 1.0, or a
+signed median above 0.1. OGS-00032 and OGS-00033 were published with eleven such
+Analyses (median `|Δ|` 24.5 to 1.2 × 10¹²) because the check ran only in the
+resolver, and their Resolution Records predated it (#510). A GWAS-SSF source's
+p-value is its `p_value` column; a GWAS-VCF's is `FORMAT/LP`, `p = 10^-LP`; a
+Column Map's is the column it maps to `p_value`. A source whose format cannot
+carry one (BESD, an association TSV, a GWAS-VCF whose header declares no `LP`, a
+Column Map that maps no `p_value`) is recorded without a record being read.
+
+The outcome is Analytical Metadata, one row per Analysis (§7a):
+`effect_consistency` is `passed`, with both medians and the rows compared, or
+`skipped`, with the reason the check could not be made — `no_source_p_value`
+(the source carries no p-value: see above), `all_se_from_p_value`,
+`too_few_rows` (fewer than 50 compared) or `joint_test_p_value` (the build
+manifest declares `p_value_test=joint_2df`, §7a, ADR 0085). No build writes
+`refused`; validation fails a release that records it. Every build since #510
+writes all five columns on every row, so the columns' presence says a release was
+built after the check: a release with none of them was built before #510 and is
+reported as unchecked, not as passed; a release with some of them, or a blank
+outcome under them, fails (`effect_consistency.evidence`, §20.0). A rewrite of a
+release built before #510 (a completion, `ogdb rewrite-release --convert-legacy`)
+keeps the columns absent.
+
+A published Store keeps no source p-value, so the check cannot be repeated on it.
+`associations.z_plausible` (§20.0) audits what a genome-wide Store holds instead:
+an Analysis with more than 30% of its observed associations at 5e-8 is not a
+genome-wide scan on the scale it claims. A release is genome-wide when its manifest
+declares `association_coverage` `gwas`; a cis, cis-and-signals or signals-only
+release is not judged, since a strong eGene's window, or a source's chosen signals,
+is legitimately mostly at 5e-8. A share above `|z|` 3 is not judged either: a sound
+genome-wide source published only below a p threshold has every `|z|` above 3.
 
 ## 10. Dense Observed-Only layout
 
@@ -2170,10 +2394,43 @@ Reference-Completed releases MUST:
 There is no Z-only completion mode.
 
 Completion preserves every observed association exactly: a source-observed cell has the same decoded Z, SE and EAF in the Reference-Completed release and is not marked imputed, and no source-missing cell is observed in it. In a Hybrid release a Dense cell becomes observed only as a crossover, a source Overflow association moved into the Dense Component when the LD panel extends its axis; it holds what that component's own codec gives for the source value. `check-observed-view` (§20.4) re-derives that from the two releases' arrays.
-A Hybrid crossover also removes the overwritten imputed or missing attempt from
-each owning block's `completion_quality` row, using the LD panel while completing,
-and refreshes the imputed rollup and completion counts. An observed association
-is not a completion attempt merely because the Dense phase first imputed it.
+A `completion_quality` row is its block's **attempts**, as completion made them, and
+nothing rewrites it afterwards. An attempted cell is held imputed, held missing,
+overwritten by an observation (a Hybrid crossover), or superseded by a missing row
+the source stored and completion carried (Ragged, ADR 0036). A Hybrid's Dense
+Component records how many attempts its crossover overwrote, per Analysis, in
+`provenance.completion.crossover_overwritten` (`n_imputed` and `n_missing`, one
+non-negative integer per Analysis; absent where there is no crossover). (Superseded 28 Nov 2026, #362: #307
+had the crossover remove the overwritten attempt from each owning block's row. That
+could not be done right where blocks overlap, since a block's row records counts and
+not which cells it attempted, and it is not done.) What the release holds is judged by
+`analyses.tsv`'s totals, below.
+
+A cell two LD blocks fill is one imputed cell: fills that agree are one, and fills
+that disagree are all dropped (ADR 0072). A cell two blocks attempt is in both
+blocks' rows, so the rows' `n_imputed` and `n_missing` can sum to more than the
+Analysis holds (a dropped fill is counted imputed by each block that made it).
+`analyses.tsv`'s `completion_n_imputed_total` and `completion_n_missing_total` are the
+cells the release holds, counted where completion wrote them, from the final planes,
+and so is the `eaf_scope` derived from the imputed total (§20.0
+`completion.imputed_total` and `completion.missing_total`, issue #362). Their
+definitions:
+
+- `completion_n_imputed_total` is the cells the imputed mask marks.
+- A Dense release's `completion_n_missing_total` is **exactly** the missing cells the
+  release holds on rows off the LD panel, whatever their cause: cells no source
+  observed, and a source cell left out for an SE above 65,504, which
+  `n_missing_se_out_of_range` also counts, in its own column. (Before #362 the second
+  kind was not in it.)
+- A Ragged release's `completion_n_missing_total` is the rows completion added and left
+  missing. It excludes a missing row the source stored and completion carried (ADR
+  0036), which the release cannot tell from a failed attempt, so it is held to a bound:
+  a non-negative integer no greater than the missing rows the release holds.
+
+A Hybrid's
+crossover takes each cell it overwrites off the totals and the manifest's counts once,
+from one read of the cells' status before it writes, and derives `eaf_scope` again from
+what remains.
 
 The one exception is an association whose SE is above 65,504 (§15, issue #338),
 which only a source before format 0.2.3 holds. Completion does not carry it: a
@@ -2187,6 +2444,51 @@ forward (§7a); `check-observed-view` holds the completed count to exactly that.
 Completion fits no SE model (ADR 0078), so an Analysis left with fewer than two
 SEs under a residual plan is coded against its source's model like any other.
 A completion of a 0.2.2 source is stamped 0.2.3 (§21.3).
+
+### 12.1 The panel a completion records
+
+`provenance.completion` names the LD Reference Panel the completion read, and
+every Dense, Ragged and Hybrid completion writes the same five fields (Hybrid
+copies them up from its Dense Component, which read the panel):
+
+| Field | Meaning |
+|---|---|
+| `ld_panel_id` | The caller's `--ld-panel-id` when given (an empty one is an error); otherwise `sha256:` and the first 16 hex digits of `ld_panel_digest`. Never a constant. |
+| `ld_panel_id_source` | `caller` where `ld_panel_id` was given, `digest` where it was derived. |
+| `ld_panel_path` | The panel root as the caller spelt it, not resolved or normalised (the CLI's `--ld-panel ./panel/` is recorded as `./panel/`); a resumed completion records the same spelling. |
+| `ld_panel_digest` | The sha256 defined below. |
+| `ld_panel_ancestry_dir` | `ld_panel_path/<ancestry>`, the directory the blocks were read from. |
+
+A completion is asked for its panel as one `PanelSource`: the root as given, the ancestry and the caller's optional name. Its other tuning (`min_cor`, `thresh`, `release_id`, `n_workers`, `overwrite`) is one `CompletionOptions`.
+
+**The digest** is the sha256, over the text of one record per input file, in the
+order completion reads them, of `<path relative to <panel>/<ancestry>>`, a line
+feed, the file's size in bytes, a line feed, the file's own sha256 in hex and a
+line feed. Every input is hashed whole. The inputs are every file a completion
+may read, and no other file under the directory. One enumerator names them
+(`opengwasdb.model.ld_panel_files.panel_input_files`), and the block loader, the
+EAF reader and the digest all take their files from the parts it is built of:
+
+1. For each chromosome directory `list_chromosomes` finds (a link to one is followed), in its sort order, and in each, in file-name order, every `*.tsv` (the EAF reader opens all of them, whether or not a block loads from it, and what it reads becomes `eaf_reference`), each followed by its `.ldeig.npz` and its `.unphased.vcor1.gz`, each if it exists. The `.unphased.vcor1.gz` is hashed whenever it exists, though the loader reads it only where the `.npz` is missing or unreadable: a file completion may read is an input.
+2. Then `indel_reference.tsv.gz`, `indel_reference.tsv.gz.tbi` and `indel_reference.json` in the ancestry directory, each if it exists.
+
+One changed byte of an input therefore changes the digest; a file under the
+directory that is not an input (a log, an `.rds`) does not. The digest is of
+bytes: a panel copied byte for byte keeps it, and one regenerated from the same
+samples, whose archives carry the time they were written, takes a new one.
+Measured with 16 reading threads: the HGDP+1kGP EUR panel (37 GB, 2,717 files) takes
+5 s with its files cached, and the UKB EUR panel (337 GB, 4,074 files) 42 s.
+
+Completion records the panel before it reads it: `build_params.json` of a Dense
+or Ragged checkpoint is written first, and the digest is added to it atomically
+once computed. A resumed completion reads the panel again and refuses where its
+digest is not the checkpoint's. A checkpoint with no digest was written before
+#327 or interrupted while the panel was read: it is refused where it holds a
+completed block, which no panel can be shown to have produced, and otherwise
+(no block done, so nothing to mix) the resume reads the panel and records its
+digest. A Hybrid keeps no checkpoint of its own.
+
+`completion.ld_panel` (§20.0) judges the fields on a completed release.
 
 ## 13. LD Reference Panel requirements
 
@@ -2892,8 +3194,9 @@ Validators MUST check at least:
 - the `n` plane is present exactly when the `encoding` block declares one, in the declared dtype, and only beside a `float16` `se` plane; its length equals the CSR's; every code is a count from 1 to `2³² − 2` or the missing code; the plane holds at least one N, since an all-missing plane reads exactly like a release without one; every Analysis holding an N declares `sample_size_scope=variant_level`; and the by-variant copy is present on both sides or neither and its sampled cells equal the CSR's (§6a, §11, ADR 0067). The read is windowed, never the whole plane;
 - the `se` plane, its `se_coefficients` and its exception table agree with the plan the manifest declares (§6a): a residual-coded plane has finite `float32` coefficients of shape `(n_analyses, 2)`, a sorted duplicate-free exception table whose positions lie inside the plane and whose entries are exactly the cells marked `-127`, and a complete `eaf` plane beside it; a `float16` plane has none of those arrays, and carrying one is a failure rather than a harmless relic;
 - `eaf_scope` (per Analysis) and the `encoding` block's `eaf` kind (per release) agree — a release declaring no plane while an Analysis declares `eaf_scope=association`, or the reverse, is rejected (§9, issue #106);
-- each Analysis's completion metadata describes its own cells: an Analysis declaring a nonzero `completion_n_imputed_total` holds at least one imputed cell, one that holds imputed cells declares them, and a blank `completed_against` with a nonzero count is rejected. The comparison is categorical, not by count — the rollup counts what the LD blocks produced and the arrays hold what was written — and it is what an ancestry-match filter (ADR 0028) applied to one and not the other looks like from outside, including the `eaf_scope` derived from the count;
+- each Analysis's completion metadata describes its own cells: an Analysis declaring a nonzero `completion_n_imputed_total` holds at least one imputed cell, one that holds imputed cells declares them, and a blank `completed_against` with a nonzero count is rejected. `completion.declaration` is that categorical comparison, and it is what an ancestry-match filter (ADR 0028) applied to one and not the other looks like from outside, including the `eaf_scope` derived from the count. `completion.imputed_total` is the exact one (#362): `completion_n_imputed_total` equals the cells the imputed mask marks. It is the mask's count, not the sum of the Analysis's `completion_quality` `n_imputed`, which counts each block's own fills — a cell two LD blocks fill is counted by both blocks but is one cell (and none where their fills disagree, the duplicate rule of ADR 0072), so the sum can exceed the total, never fall below it. It fails an Analysis whose declared total differs from the mask's count in either direction, including where one is zero;
 - every Analysis with `eaf_scope=association` carries EAF orientation evidence (§9.1, issue #115) **unless no component of the release declares an `eaf` plane**, in which case its frequencies are the panel's alone and there is no column to check: a blank `eaf_orientation` fails, since a frequency column that has never been checked is indistinguishable from one reported against the other allele; a recorded `failed` fails; `unverified` warns; and `analyses.tsv` and `manifest.json` MUST agree on the outcome recorded for each Analysis;
+- every recorded `effect_consistency` outcome describes the build's check of each stored z against its source's p-value (§9.2, #510): a recorded `refused` fails, a `passed` carries its measurement and a `skipped` its reason; a blank outcome, or some of the five columns without the others, fails; a release with none of them warns, since a release built before builds ran the check says nothing about whether its effects are on the scale they claim. On a genome-wide release (`association_coverage` `gwas`), an Analysis with more than 30% of its observed associations at 5e-8 fails (`associations.z_plausible`): its effects are on another scale;
 - the Zarr on-disk format matches `format_version`: a 0.1.0 release has Zarr v2 metadata (`.zarray`/`.zgroup`, `zarr_format: 2`) and no `zarr.json` anywhere; a 0.2 release (`0.2.0`, `0.2.1` or `0.2.2`) has Zarr v3 metadata (`zarr.json`, `zarr_format: 3`) and no v2 metadata anywhere, and every array uses the `sharding_indexed` codec. A half-converted release — one manifest, two formats — is invalid (§10a, ADR 0057);
 - a 0.2 release is stamped the lowest `format_version` its features use, for every release and component, a Hybrid's outer release included: 0.2.2 when its indel ALIDs are spelt reference first (which its stamp declares and `variant_table.indel_order` holds it to), whether or not it carries `regions.tsv`; otherwise 0.2.1 when its manifest declares `regions.tsv`, and 0.2.0 when it does not (§21.3, issues #430, #381);
 - an Indexed Variant Subset, when present, is self-describing and agrees with the release it indexes (§10b): the only entries under `data.zarr/indexed_subsets` are published subset groups — no staging or replacement directory, no unknown name, no non-group entry and no explicit empty group — and each group records a name, profile, encoding and source identity matching the release. It carries exactly the arrays its declared encoding and the release's Completion State define — an Observed-Only release's index has no `imputed`, a Reference-Completed release's must; a release declaring reference EAF carries `eaf_reference`, and one that does not carries none; `imputed` holds only 0 and 1; `variant_index` is stored `int32` and is non-empty, sorted ascending, unique and in `[0, n_variants)` — a zero-variant subset is not an index and is rejected even when its planes are zero-length; every array's inner chunk and shard match the format's `ArrayRole` policy (the layout is derived, never an attribute); its Analysis-major planes have shape `(n_analyses, n_subset_variants)` and the declared dtypes; `eaf_reference` holds one entry per indexed variant when declared; its side tables are sorted, unique and in range; Z and SE missingness agree within the index; no imputed cell is missing; the `imputed` mask and `eaf_reference` equal the release's own; and every **decoded** indexed Z, SE and EAF equals the authoritative primary-plane cell at that Store Variant Index. This is the **standalone** `validate` contract and it is exhaustive. The build's own staged publication gate is narrower and documented: exhaustively it checks only the enumerated structural rules -- self-describing identity and attributes, the exact array set, shapes and dtypes, the inner-chunk/shard layout, the full Variant Index (dtype, non-empty, sorted, unique, in bounds), counts and provenance, and the small side tables' structure and remapping (with the per-variant `eaf_baseline`/`eaf_reference`) -- while the `imputed` mask domain and agreement, Z/SE missingness, and decoded Z/SE/EAF values are compared over a documented deterministic, bounded, input-checksum-seeded sample (the endpoints of both axes, a spread of physical write-unit and inner-chunk boundaries, a spread of Analyses and seeded cells). The build records `validation_mode`, the sample strategy, seed and cell count, and its duration, and an isolated unsampled corruption is caught by the exhaustive standalone audit instead. A release with no `indexed_subsets` group stays valid and unchanged, and a reader MUST refuse a subset whose recorded source release, store, format, assembly or encoding does not match the release, before decoding any value (ADR 0061, issue #264, #266);
@@ -2988,6 +3291,7 @@ change to this table, which the test suite holds to the registry, in its order.
 | `variant_table.representatives` | release | fold | the tabix index finds the rows the table holds, and on a release before 0.3.0 so does the offset sidecar; on 0.3.0, where no query reads the table or its tabix index, the tabix index is still checked as the convenience it is (§1.1), and the position sidecar, not offsets, places the rows (#469) |
 | `variant_table.indel_order` | release | fold | from format 0.2.2, every indel row's ALID spells its alleles as the row records them: its `effect_allele` then its `other_allele`, and, for a lifted variant, its reference first as its `source_alid` does; not judged on a 0.2.1, 0.2.0 or 0.1.0 release, which sorts an indel's alleles |
 | `variant_table.lifted_contig` | release | fold | no row on an alt, random or unplaced contig has a `source_alid` on another contig: a lift left no variant there (§4); an error from format 0.2.2, a warning on an earlier release, 0.9.0's 0.2.1 included, which #367 owns; a row with no `source_alid` is not judged, and warned of as such: on a release converted `--lifted` that records them as its `variant_table.lifted_contig` deviation, the warning names the conversion, and a recorded count other than the rule's fails it (#504) |
+| `variant_table.assembly_gap` | release | fold | on a GRCh38 release, no row is in an assembly gap, a run of two or more `N`, or past its contig's end (§4, #410): a build drops such a row as `in_assembly_gap` or `past_contig_end`; an error from format 0.2.2, a warning on an earlier release, as `variant_table.lifted_contig` is; a single `N` base is not a gap; a release on another readable assembly is not judged, and one whose `reference_assembly` names no assembly is skipped, saying so |
 | `variant_table.source_alid` | release | fold | a release whose manifest records a lift (a `provenance.lift` block with `n_lifted` above 0, or a `provenance.chain_file`, which a build writes as a default label whether or not it lifted) has at least one row with a `source_alid`; one blank row is no fault (a collision, or a row Reference Completion added from the panel), but a table with none holds no row's lift provenance (#449); a release in which every row is ambiguous under #85 (its sites name different origins) also fails, which only a toy fixture can be; an error on every `format_version`, a 0.2 release included -- every hosted release is rebuilt from source at 0.3.0; the rows are counted from the `source_alid` sidecar from 0.3.0, which `variant_table.source_alid_sidecar` holds to the table, and from the table before it; a Hybrid is judged on its shared table alone |
 | `sqlite.variant_aliases` | release | check | every alias names a variant the table holds; skipped where there is no alias table; not judged on a 0.3.0 release, which carries none |
 | `analyses.readable` | release | check | `analyses.tsv` parses |
@@ -3003,6 +3307,8 @@ change to this table, which the test suite holds to the registry, in its order.
 | `analyses.se_out_of_range_count` | release | check | `n_missing_se_out_of_range` holds a non-negative integer on every row from `format_version` 0.2.3, a Hybrid root's included; below it, blank (unknown) or a non-negative integer (§7a) |
 | `analyses.se_out_of_range_partition` | release | check | a Hybrid root's `n_missing_se_out_of_range` is at least its Dense Component's, Analysis by Analysis (§7a); from 0.3.0 the component counts none of its own, so nothing is compared (§16) |
 | `regions.table` | release | check | `regions.tsv`, when present or declared, is declared by the manifest's `regions` entry, has its SHA-256, parses as a region table and names only Analyses the release holds (§2, §17) |
+| `effect_consistency.evidence` | release | check | on a release with the effect-consistency columns: all five are present, and every Analysis carries an outcome (a blank is a build since #510 that stamped none); each outcome says what the build measured: `refused` fails (the Analysis's stored z contradicts its source's p-value); `passed` carries both medians and a positive row count and no reason; `skipped` names a skip reason and no measurement (§9.2, #510). A release with none of the columns is not judged |
+| `effect_consistency.unchecked` | release | check, warning | a release whose `analyses.tsv` has none of the effect-consistency columns was built before #510: nothing in it says its Analyses' effects are on the scale they claim (§9.2) |
 | `csr.arrays` | sequence | check | `offsets`, `variant_index`, `z` and `se` are present |
 | `csr.lengths` | sequence | check | each parallel array, `eaf` included, holds one entry per association |
 | `csr.analyses` | sequence | check | `analyses.tsv` has one row per segment `offsets` bounds |
@@ -3028,6 +3334,8 @@ change to this table, which the test suite holds to the registry, in its order.
 | `grid.planes` | grid | check | `z` and `se` are present, and every plane spans the grid's axes |
 | `grid.eaf_side_lengths` | grid | check | the per-variant `eaf` side arrays are the variant axis's length |
 | `completion.mask` | grid, sequence | check | a completed component carries a mask of its shape, and a grid binary panel flags |
+| `completion.ld_panel` | release | check | a completion that records any of the LD panel fields added at #327 (§12.1) records all five, the digest is a sha256, a `digest`-sourced `ld_panel_id` is the digest's `sha256:` prefix, and a Hybrid's root and Dense Component record the same panel; an error |
+| `completion.ld_panel_unrecorded` | release | check, warning | a completion records the LD panel fields added at #327; a **warning**, since an earlier completion records only `ld_panel_id` (the one name every completion carried) and its `format_version` is unchanged |
 | `csr.segment_order` | sequence | fold | `variant_index` strictly increases within every Analysis's segment |
 | `csr.shared_rows` | sequence | fold | an Overflow's `variant_index` addresses rows of the shared variant table |
 | `hybrid.partition` | sequence | fold | no Overflow association is at a Dense Component variant |
@@ -3042,8 +3350,11 @@ change to this table, which the test suite holds to the registry, in its order.
 | `completion.imputed_present` | grid, sequence | fold | an imputed cell carries both Z and SE |
 | `completion.off_panel` | grid | fold | no off-panel row is imputed |
 | `completion.declaration` | grid, sequence | fold | each Analysis holds imputed cells exactly when it declares them |
-| `completion.quality_counts` | grid, sequence | fold | for Analyses with at most one quality row, counts agree with stored cells; ancestry exclusion qualifies missing-cell comparison |
+| `completion.imputed_total` | grid, sequence | fold | each Analysis's `completion_n_imputed_total` is exactly the cells its imputed mask marks (§12); a cell two blocks fill is one, and one they disagree on is none; every `analyses.tsv` that declares it is judged (a 0.2.3 Hybrid's root as well as its Dense Component's), and a value that is not a non-negative integer fails |
+| `completion.missing_total` | grid, sequence | fold | each Analysis's `completion_n_missing_total` against the cells the release holds no value at (§12): a Dense release's off-panel missing cells exactly, a Ragged release's missing rows as an upper bound; unreadable values fail, in every `analyses.tsv` that declares it |
+| `completion.quality_counts` | grid, sequence | fold | for Analyses with at most one quality row (its block's attempts, §12): a Dense row's counts equal the stored cells; a Hybrid Dense Component's equal them plus the attempts its crossover overwrote (`crossover_overwritten`); a Ragged row's imputed count is at least the imputed rows held and at most those plus the missing rows held, its imputed plus missing equal the rows held; ancestry exclusion qualifies missing-cell comparison |
 | `associations.eaf_range` | grid, sequence | fold | no decoded frequency falls outside `[0, 1]`; skipped on a component holding none, and behind `side_tables.eaf_exceptions` where the plane cannot be decoded |
+| `associations.z_plausible` | grid, sequence | fold | on a genome-wide release -- one whose manifest declares `association_coverage` `gwas`; a cis, cis-and-signals or signals-only release is not judged -- no Analysis with at least 1,000 observed associations has more than 30% of them at 5e-8 (\|z\| ≥ `z_critical(5e-8)`); imputed cells are not counted, and a Hybrid's Analysis is judged on its counts summed over the Dense Component and the Overflow, reported once, by the component whose pass ends second. An error from `format_version` 0.2.2, a warning before it. The measured gap: the twelve mis-scaled Analyses have 81% or more of their sources' rows at 5e-8, sound ones at most 9.7% (GCST90245992, height, OGS-00011); over every published Store only GCST002047 (OGS-00005) is flagged (`/data/opengwasdb/work/orchestrate/opengwasdb-367/scratch/510/signals_table.md`, `survey.jsonl`; §9.2, #510). A share above \|z\| 3 is not judged: it flags sound sources published only below a p threshold (GCST90444395, GCST90271757). Catches an odds ratio stored as a log-odds ratio and a mis-scaled effect in a Store built before builds checked effects |
 | `side_tables.z_overflow` | grid, sequence | fold | the `z` overflow table describes exactly the overflow cells |
 | `side_tables.eaf_exceptions` | grid, sequence | fold | the `eaf` exception table describes exactly the exception cells, and a plane that cannot be decoded is reported |
 | `side_tables.se_exceptions` | grid, sequence | fold | the `se` exception table describes exactly the exception cells |
@@ -3069,7 +3380,7 @@ change to this table, which the test suite holds to the registry, in its order.
 | `clumps.reclump` | grid, sequence | check | runs only when `validate` is given the LD Stores (`--ld-store ANCESTRY=PATH`), and is recorded as not run otherwise, which is not a pass. Each given store's recomputed `provenance_sha256` equals its entry's; and for a seeded sample of clumped Analyses (at most 25 of those whose ancestry was given, drawn with the run's fidelity seed, `validate --fidelity-seed`, 0 unless given), clumped again from that LD Store as §18.1 says, `lead` and `r` agree row for row. The finding names the seed and the sample. It re-clumps with the step's own code (`opengwasdb.clumps.compute_clumps`), so it catches arrays changed after they were written, or clumped against another LD Store, not a defect in the step itself, which would write and re-derive the same wrong arrays; `clumps.greedy` and the tests' independent re-clump are the checks of the step. Catches the wrong LD Store, an absent row made its own lead, a present row marked absent, and a sign not flipped where a translated indel's A1 swaps |
 | `by_variant.sample` | sequence | check | sampled index cells hold the codes and exact values the sequence holds |
 | `completion.quality_table` | grid, sequence | check | the `completion_quality` table is complete and names real Analyses |
-| `completion.n_missing_column` | grid, sequence | check | `analyses.tsv` carries `completion_n_missing_total` |
+| `completion.n_missing_column` | grid, sequence | check | `analyses.tsv` carries `completion_n_imputed_total` and `completion_n_missing_total`; the rules judging each total skip a table without it |
 | `rho.members` | grid | check | a Rho Matrix records its provenance and carries its arrays |
 | `rho.analyses` | grid | check | the matrix was estimated over the release's Analyses |
 | `rho.lengths` | grid | check | `rho` and `n_null` hold one entry per pair of Analyses |
@@ -3088,8 +3399,12 @@ change to this table, which the test suite holds to the registry, in its order.
 
 `completion.quality_counts` counts cells on the existing `ASSOCIATIONS` scan,
 without another plane read. An Analysis with **one quality row** is judged against
-the final planes: `completion_quality.n_imputed` equals the imputed mask's count,
-and `n_imputed + n_missing` equals imputed plus missing panel cells. Dense off-panel
+the final planes as a row of attempts (§12): `n_imputed` equals the imputed mask's
+count, and `n_imputed + n_missing` equals imputed plus missing panel cells, each
+plus, on a Hybrid's Dense Component, the attempts its crossover overwrote
+(`provenance.completion.crossover_overwritten`). A Ragged row's `n_imputed` is bounded
+instead, since a fill superseded by a carried missing row is held as missing: at least
+the imputed rows held, at most those plus the missing rows held. Dense off-panel
 missing cells are excluded. With **zero quality rows**, both expected counts are
 zero and the same comparisons apply, except that missing completion attempts are
 not judged when recorded panel ancestry, Assigned Ancestry and blank
@@ -3105,7 +3420,8 @@ cell repeatedly, including fills collapsed or dropped under ADR 0072. The Store
 cannot prove whether multiple rows describe distinct cells, so validation skips
 their reconciliation, including apparently non-overlapping blocks. It cannot
 detect lost fills or count transfers in these Analyses from quality counts alone.
-No per-block comparison is made, and a block id is not interpreted as a genomic
+`completion.quality_counts` judges a row as attempts; the release's totals are judged by
+`completion.imputed_total` and `completion.missing_total`. No per-block comparison is made, and a block id is not interpreted as a genomic
 interval or an external panel path. Malformed quality-table structure is reported by
 `completion.quality_table`; `completion.quality_counts` also fails if its counts
 cannot be read, including when selected on its own.

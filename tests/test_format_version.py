@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pytest
 
+from opengwasdb.completion.ld_panel import PanelSource
 from opengwasdb.layouts.dense.complete import complete_dense_store
 from opengwasdb.store import open as store_open
 from opengwasdb.store_reader import format as store_format
@@ -147,8 +148,7 @@ def test_completion_refuses_a_source_that_sorts_its_indels(tmp_path, dense_store
             out,
             # Deliberately not a usable panel: the version check must fire
             # first, so completion never reads it.
-            ld_dir=tmp_path / "no-such-panel",
-            ancestry="EUR",
+            PanelSource(tmp_path / "no-such-panel"),
         )
 
     assert not out.exists()
@@ -172,8 +172,7 @@ def test_completion_refuses_a_source_it_cannot_write_before_doing_any_work(
             out,
             # Deliberately not a usable panel: the version check must fire
             # first, so completion never gets far enough to read it.
-            ld_dir=tmp_path / "no-such-panel",
-            ancestry="EUR",
+            PanelSource(tmp_path / "no-such-panel"),
         )
 
     assert not out.exists()

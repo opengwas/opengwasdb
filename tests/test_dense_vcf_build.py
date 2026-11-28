@@ -2145,26 +2145,36 @@ class TestVariantReferenceSinglePass:
         assert provenance["variant_reference"] == str(reference)
         assert provenance["builder"] == "opengwasdb.v0.1_dense_vcf_single_pass"
 
-    def test_single_pass_never_runs_the_union_pass(self, tmp_path, monkeypatch):
-        """The reference supplies the axis, so the Pass 1 variant-union read is
-        never invoked -- proven by making it raise."""
+    def test_single_pass_reads_the_sources_once_and_names_as_its_reference(
+        self, tmp_path, monkeypatch
+    ):
+        """A reference extracted from the same manifest names every variant its
+        sources name. Its names are still checked against one harvest of the sources
+        (#258) -- one Pass 1 read, never a second -- and the axis carries exactly the
+        reference's names, as it did when the harvest was skipped."""
         from opengwasdb.variants.routing import route
 
         manifest = self._mixed_manifest(tmp_path)
         reference = _write_reference_from_manifest(tmp_path, manifest)
-        assert read_variant_reference(reference).rsid_by_alid, "a named reference reads nothing"
+        named = read_variant_reference(reference).rsid_by_alid
+        assert named, "fixture: the reference names rsids"
+        reads: list[int] = []
+        real = route.consume_shards
 
-        def _boom(*_args, **_kwargs):
-            raise AssertionError("Pass 1 ran despite a supplied variant reference")
+        def _counted(*args, **kwargs):
+            reads.append(1)
+            return real(*args, **kwargs)
 
-        monkeypatch.setattr(route, "consume_shards", _boom)
-        store = tmp_path / "union-bypassed.opengwasdb"
+        monkeypatch.setattr(route, "consume_shards", _counted)
+        store = tmp_path / "named.opengwasdb"
         build_dense_from_vcf_manifest(
             manifest, store, store_id="s", release_id="r", variant_reference=reference
         )
         assert validate_store(store).ok
+        assert reads == [1]
+        assert {a: r for a, r in _axis_rsids(store).items() if r} == named
 
-    def test_single_pass_logs_pass1_bypass(self, tmp_path, caplog):
+    def test_single_pass_logs_the_harvest(self, tmp_path, caplog):
         import logging
 
         manifest = self._mixed_manifest(tmp_path)
@@ -2177,7 +2187,8 @@ class TestVariantReferenceSinglePass:
             )
 
         assert "Single-pass build: variant axis loaded from" in caplog.text
-        assert "Pass 1: collecting source variants" not in caplog.text
+        assert "Single-pass build: Pass 1 harvest resolved" in caplog.text
+        assert "names differently from its sources" not in caplog.text
 
     def test_omitted_reference_still_runs_two_pass(self, tmp_path, caplog):
         import logging
@@ -2262,12 +2273,11 @@ class TestVariantReferenceErrors:
         )
         return _make_manifest(tmp_path, [("trait_a", vcf, "Trait A")])
 
-    def test_identity_reference_with_hg19_manifest_warns_and_drops(self, tmp_path, caplog):
-        """An identity panel resolves only hg38 coordinates; an hg19 manifest is
-        accepted (off-reference variants drop as documented), but the assembly
-        mismatch is logged so it cannot pass unremarked."""
-        import logging
-
+    def test_identity_reference_lifts_an_hg19_manifest_with_the_real_chain(self, tmp_path):
+        """A plain list names no source keys, so an hg19 row is lifted, as the two-pass
+        build lifts it, and never stored at its own coordinate (issue #260). The list
+        holds hg19 1:1000000's own coordinate as an ALID, the ticket's case: the row is
+        stored at 1:1064620:C:T, where the bundled chain puts it."""
         from opengwasdb.variants.legacy_table import iter_variant_records
 
         vcf = _make_vcf(
@@ -2279,19 +2289,29 @@ class TestVariantReferenceErrors:
         )
         manifest = _make_manifest(tmp_path, [("trait_hg19", vcf, "Trait hg19")])
         reference = tmp_path / "panel.alids"
-        reference.write_text("1:100000:A:G\n", encoding="utf-8")
+        reference.write_text(
+            f"{HG38_ALID_1}\n1:{HG19_POS_2}:C:T\n{HG38_ALID_2}\n", encoding="utf-8"
+        )
         store = tmp_path / "identity.opengwasdb"
 
-        with caplog.at_level(logging.WARNING):
-            build_dense_from_vcf_manifest(
-                manifest, store, store_id="s", release_id="r", variant_reference=reference
-            )
+        build_dense_from_vcf_manifest(
+            manifest, store, store_id="s", release_id="r", variant_reference=reference
+        )
 
-        assert "carries no source-key mapping" in caplog.text
         assert validate_store(store).ok
         assert {r.alid for r in iter_variant_records(store / "variants.tsv.gz")} == {
-            "1:100000:A:G"
+            HG38_ALID_1, f"1:{HG19_POS_2}:C:T", HG38_ALID_2,
         }
+        with query_store(store) as query:
+            stored = query.lookup([f"1:{HG19_POS_2}:C:T", HG38_ALID_2], ["trait_hg19"])
+            table = query.variants_table()
+            z_by_alid = {
+                table[int(i)]["alid"]: float(z)
+                for i, z in zip(stored.variant_index, stored.z, strict=True)
+                if not np.isnan(z)
+            }
+        assert list(z_by_alid) == [HG38_ALID_2], "stored where it lifts, and only there"
+        assert z_by_alid[HG38_ALID_2] == pytest.approx(-5.0, abs=0.01)
 
     def test_artifact_round_trips_source_keys_and_rsids(self, tmp_path):
         source_lookup = {
@@ -2830,11 +2850,11 @@ class TestPlainAlidReferenceRsids:
                 variant_reference=plain,
             )
 
-    def test_named_reference_warns_about_its_blank_rows(self, tmp_path, caplog):
-        """Issue #255, round 5 finding 2: the Dense builder shares the
-        `--variant-reference` help and spec, so it must warn on the
-        reference-named path too. Dense has no fold, so only the reference-rows
-        half applies; the row the reference leaves blank stays blank."""
+    def test_named_reference_fills_the_rows_it_leaves_unnamed(self, tmp_path, caplog):
+        """Issue #258 (Fill): a reference that names some rsids has the sources
+        harvested too, so the row it leaves unnamed carries its source's name, as
+        the two-pass build's does. Dense has no fold, so only the reference's own
+        rows apply."""
         import logging
 
         vcf = _make_vcf(
@@ -2857,8 +2877,8 @@ class TestPlainAlidReferenceRsids:
             )
 
         assert _axis_rsids(two_pass) == {HG38_ALID_1: "rsPANEL", HG38_ALID_3: "rsUNNAMED_REF"}
-        assert _axis_rsids(single_pass) == {HG38_ALID_1: "rsPANEL", HG38_ALID_3: ""}
-        assert "names 1 of its 2 ALIDs and leaves 1 blank" in caplog.text
+        assert _axis_rsids(single_pass) == _axis_rsids(two_pass)
+        assert "stored with no rsid" not in caplog.text
 
     def test_sources_with_no_rsids_still_build(self, tmp_path):
         """The rule cannot fire falsely: a source that genuinely names no rsids

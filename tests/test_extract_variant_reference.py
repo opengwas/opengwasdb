@@ -1663,3 +1663,43 @@ def test_two_stage_build_matches_the_one_command_two_pass_store(tmp_path):
     records = {r.alid: r.rsid for r in iter_variant_records(single_pass / "variants.tsv.gz")}
     assert records[HG38_ALID_1] == "rs1"
     assert records[HG38_ALID_3] == "rs3"
+
+
+# ── lift collisions (issues #325, #260) ──────────────────────────────────────
+
+
+def _collision_extraction(tmp_path: Path, native: bool, window_size_mb: float):
+    """hg19 501 and 1001 both lift to 1:5501:A:G (`write_collision_chain`); 1501 lifts
+    to 1:6001:C:T alone. With ``native``, a GRCh38 source also declares 1:501:A:G."""
+    from lift_collision_fixtures import ROWS, named_row
+    from liftover_fixtures import vcf_manifest, write_collision_chain
+    from residual_fixtures import write_gwas_vcf_with_eaf
+
+    vcfs = {"b": write_gwas_vcf_with_eaf(tmp_path / "b.vcf", ROWS)}
+    assembly: dict[str, str] = {"b": "hg19"}
+    if native:
+        vcfs = {"a": write_gwas_vcf_with_eaf(tmp_path / "a.vcf", [named_row(501, "A", "G", ".")]),
+                **vcfs}
+        assembly = {"a": "hg38", **assembly}
+    artifact = tmp_path / "collided.variant-ref.tsv.gz"
+    result = extract_from_manifest(
+        vcf_manifest(tmp_path, vcfs, assembly=assembly), artifact,
+        chain_file=write_collision_chain(tmp_path / "forward.chain"),
+        window_size_mb=window_size_mb,
+    )
+    return read_variant_reference(artifact), result
+
+
+@pytest.mark.parametrize("window_size_mb", [20.0, 0.0005], ids=["one-window", "two-windows"])
+@pytest.mark.parametrize("native", [False, True], ids=["hg19", "beside-a-native-row"])
+def test_extraction_writes_no_alid_two_lifted_loci_reach(tmp_path, native, window_size_mb):
+    """Both sources are dropped, never one routed to 1:5501:A:G, and each is recorded
+    with its ALID and its own rsid, as `place_union` drops and records them. The native
+    1:501:A:G spells a dropped lifted key, so it is dropped too (two loci). A 500 bp
+    window puts 501 and 1001 in different pre-lift windows: the guard sees both."""
+    reference, result = _collision_extraction(tmp_path, native, window_size_mb)
+    assert reference.alids == ["1:6001:C:T"]
+    assert set(reference.source_lookup) == {("1", 1_501, "C", "T")}
+    assert sorted(result.lift_collisions) == [
+        ("1:5501:A:G", "1:1001:A:G", "rs_second"), ("1:5501:A:G", "1:501:A:G", "rs_first"),
+    ]

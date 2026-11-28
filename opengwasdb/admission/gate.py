@@ -10,7 +10,7 @@ reports come from one judgement and cannot disagree (stores #176).
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import Protocol
 
 import numpy as np
@@ -26,6 +26,16 @@ from opengwasdb.admission.rules import (
 from opengwasdb.readers.interface import StreamTally
 
 __all__ = ["Gate", "RoutedBatch", "counting_gate"]
+
+
+class UnmatchedRows(Protocol):
+    """One Analysis's rows no axis holds (`Unmatched`): their Routing Keys, and the
+    rows of some keys as their source spells them."""
+
+    @property
+    def keys(self) -> Sequence[str]: ...
+
+    def raw_keys_of(self, wanted: Collection[str]) -> frozenset[str]: ...
 
 
 class RoutedBatch(Protocol):
@@ -66,6 +76,7 @@ class Gate:
         self.rules = rules
         self._counts = AdmissionCounts()
         self._dropped: list[tuple[str, Reason]] = []
+        self._lift_collided: set[str] = set()
 
     @property
     def counts(self) -> AdmissionCounts:
@@ -108,15 +119,59 @@ class Gate:
         if reason in LOGGED:
             self._dropped.extend((key, reason) for key in keys)
 
-    def unplaced_off_axis(self, keys: Sequence[str], lifted_off_primary: Collection[str]) -> None:
+    def unplaced_off_axis(
+        self,
+        keys: Sequence[str],
+        lifted_away: Mapping[str, str],
+        lift_collided: Collection[str] = (),
+        *,
+        lifted: bool | None = None,
+    ) -> None:
         """Rows no axis holds, named by ``keys``: `off_axis`, except those whose key
-        is in ``lifted_off_primary``, which a lift placed off the primary assembly
-        and are counted as `lift_off_primary` (#376)."""
-        if not lifted_off_primary:
+        is in ``lifted_away``, which a lift placed where no Store row can be and are
+        counted under the reason it gives: `lift_off_primary` off the primary assembly
+        (#376), `in_assembly_gap` or `past_contig_end` where GRCh38 has no sequence
+        (#410); and those in ``lift_collided``, a
+        lifted site dropped because another source locus reached its ALID (#325). Those
+        are `lift_collision` where this Analysis was ``lifted``, and otherwise
+        `lift_ambiguous`: a row of a source already on the Store's assembly that spells
+        a dropped lifted site's key. Whether it was lifted is never assumed."""
+        if lift_collided and lifted is None:
+            raise ValueError(
+                "rows of a lift collision are counted by whether their Analysis was lifted"
+            )
+        if not (lifted_away or lift_collided):
             self.unplaced(Reason.OFF_AXIS, keys)
             return
-        self.unplaced(Reason.OFF_AXIS, [key for key in keys if key not in lifted_off_primary])
-        self.unplaced(Reason.LIFT_OFF_PRIMARY, [key for key in keys if key in lifted_off_primary])
+        held = _by_reason(
+            keys,
+            lifted_away,
+            lift_collided if lifted else (),
+            () if lifted else lift_collided,
+        )
+        for reason, found in held.items():
+            self.unplaced(reason, found)
+
+    def unplaced_unmatched(
+        self,
+        unmatched: UnmatchedRows,
+        lifted_away: Mapping[str, str],
+        lift_collided: Collection[str],
+        *,
+        lifted: bool,
+    ) -> None:
+        """The unmatched rows of one Analysis, dropped (`unplaced_off_axis`). A
+        `lift_collision` row is also named as its source spells it
+        (``chrom:pos:ref:alt``), which the build's collision ledger lists."""
+        self.unplaced_off_axis(unmatched.keys, lifted_away, lift_collided, lifted=lifted)
+        if lifted:
+            self._lift_collided |= unmatched.raw_keys_of(lift_collided)
+
+    @property
+    def lift_collided_rows(self) -> frozenset[str]:
+        """The rows `unplaced_unmatched` dropped as `lift_collision`, as their sources
+        spell them."""
+        return frozenset(self._lift_collided)
 
     def streamed(self, tally: StreamTally) -> None:
         """What the Source Reader did to this Analysis's rows as it read them.
@@ -151,10 +206,12 @@ class Gate:
         """`source_rows` for one of Variant Routing's batches: its ``admit=``.
 
         An Analysis that declared no score was read without one, so its rows'
-        scores are not handed on. A logged row is named by its source
+        scores are not handed on, and one whose rules judge no position is handed
+        none (`AnalysisRules.sequence`). A logged row is named by its source
         coordinate, ``chromosome:position:ref:alt`` as the reader spelt it.
         """
         declared = self.reads_imputation_scores
+        placed = self.rules.sequence is not None
         return self.source_rows(
             SourceRows(
                 eaf=batch.eaf,
@@ -162,12 +219,42 @@ class Gate:
                 imputation_status=batch.imputation_status if declared else None,
                 se=batch.se,
                 z=batch.z,
+                chromosome=np.asarray(batch.chromosome, dtype=object) if placed else None,
+                position=np.asarray(batch.position, dtype=np.int64) if placed else None,
                 keys_at=lambda positions: [
                     f"{batch.chromosome[i]}:{batch.position[i]}:{batch.ref[i]}:{batch.alt[i]}"
                     for i in positions.tolist()
                 ],
             )
         )
+
+
+def _by_reason(
+    keys: Sequence[str],
+    lifted_away: Mapping[str, str],
+    lift_collided: Collection[str],
+    lift_ambiguous: Collection[str],
+) -> dict[Reason, list[str]]:
+    """``keys`` by the reason their rows left the axis, in precedence order: a
+    collided lifted site, a native row spelling its key, a lift to where no Store
+    row can be (under the reason it carries), else `off_axis`."""
+    held: dict[Reason, list[str]] = {
+        reason: []
+        for reason in (
+            Reason.OFF_AXIS, Reason.LIFT_OFF_PRIMARY, Reason.LIFT_COLLISION, Reason.LIFT_AMBIGUOUS,
+            Reason.IN_ASSEMBLY_GAP, Reason.PAST_CONTIG_END,
+        )
+    }
+    for key in keys:
+        if key in lift_collided:
+            held[Reason.LIFT_COLLISION].append(key)
+        elif key in lift_ambiguous:
+            held[Reason.LIFT_AMBIGUOUS].append(key)
+        elif key in lifted_away:
+            held[Reason(lifted_away[key])].append(key)
+        else:
+            held[Reason.OFF_AXIS].append(key)
+    return held
 
 
 def counting_gate(rules: AnalysisRules) -> Gate:

@@ -15,19 +15,47 @@ is not built from these helpers.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
 from opengwasdb.completion.block import COMPLETION_METHOD
+from opengwasdb.completion.ld_panel import PanelIdentity
 from opengwasdb.store.open import completed_format_version
 from opengwasdb.store_reader.encoding.plan import StoreEncoding
 from opengwasdb.store_reader.enums import CompletionState
 from opengwasdb.store_reader.manifest import StoreManifest
 
+#: The `provenance.completion` fields that say which LD panel a completion read
+#: (spec §12.1).
+PANEL_FIELDS = (
+    "ld_panel_id", "ld_panel_id_source", "ld_panel_path", "ld_panel_digest",
+    "ld_panel_ancestry_dir",
+)
+
+#: The panel fields #327 added: `ld_panel_id` alone was recorded before, as a constant.
+PANEL_FIELDS_SINCE_327 = PANEL_FIELDS[1:]
+
+
+def panel_provenance(panel: PanelIdentity) -> dict[str, str]:
+    return {
+        "ld_panel_id": panel.panel_id,
+        "ld_panel_id_source": "caller" if panel.given_id else "digest",
+        "ld_panel_path": panel.path,
+        "ld_panel_digest": panel.digest,
+        "ld_panel_ancestry_dir": panel.ancestry_dir,
+    }
+
+
+def panel_fields(completion: Mapping[str, Any]) -> dict[str, Any]:
+    """The panel fields of a completion record, as `build_completion_provenance`
+    wrote them; a Hybrid copies them up from its Dense Component."""
+    return {key: completion[key] for key in PANEL_FIELDS}
+
 
 def build_completion_provenance(
     *,
-    ld_panel_id: str,
+    ld_panel: PanelIdentity,
     ancestry: str,
     min_cor: float,
     thresh: float,
@@ -37,7 +65,7 @@ def build_completion_provenance(
 ) -> dict[str, Any]:
     return {
         "method": COMPLETION_METHOD,
-        "ld_panel_id": ld_panel_id,
+        **panel_provenance(ld_panel),
         "ancestry": ancestry,
         "min_cor": min_cor,
         "pca_thresh": thresh,
@@ -77,7 +105,7 @@ def completed_release_manifest(
     provenance = {
         **source_manifest.provenance,
         "source_release_id": source_manifest.release_id,
-        "completion": completion_provenance,
+        "completion": {**source_manifest.provenance.get("completion", {}), **completion_provenance},
     }
     ragged = {
         key: value

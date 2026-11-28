@@ -43,6 +43,8 @@ import opengwasdb.encoding.memory as memory
 import opengwasdb.layouts.ragged.complete as complete_module
 import opengwasdb.layouts.ragged.zarr_csr as zarr_csr
 from opengwasdb.completion.checkpoint import checkpoint_dir_for
+from opengwasdb.completion.ld_panel import PanelSource
+from opengwasdb.completion.options import CompletionOptions
 from opengwasdb.encoding.sd_units import PhenotypeSd
 from opengwasdb.layouts.ragged.complete import complete_ragged_store, resume_ragged_completion
 from opengwasdb.layouts.ragged.zarr_csr import RaggedCSRWriter
@@ -106,8 +108,11 @@ def _build_source(root: Path) -> Path:
 
 def _complete(source: Path, panel: Path, dst: Path, n_workers: int) -> Path:
     complete_ragged_store(
-        source, dst, panel, ancestry="EUR", cis_window_bp=1_000_000, min_cor=0.0,
-        release_id="comp", n_workers=n_workers,
+        source,
+        dst,
+        PanelSource(panel, ancestry="EUR"),
+        CompletionOptions(min_cor=0.0, release_id="comp", n_workers=n_workers),
+        cis_window_bp=1_000_000,
     )
     return dst
 

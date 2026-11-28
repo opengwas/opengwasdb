@@ -171,6 +171,8 @@ def migrate_store(store_path: str | Path) -> list[str]:
                     str(row["n_missing_off_panel"]) if "n_missing_off_panel" in row else ""
                 ),
                 original_sd_method=OriginalSdMethod.UNAVAILABLE.value,
+                # Built long before builds checked effects (#510): no columns.
+                effect_consistency=None,
             )
         )
 
@@ -240,6 +242,8 @@ def migrate_analyses_tsv_in_place(store_path: str | Path) -> list[str]:
                 n_hits_5e8=row.get("n_hits_5e8", ""),
                 n_hits_5e6=row.get("n_hits_5e6", ""),
                 n_hits_5e4=row.get("n_hits_5e4", ""),
+                # Built long before builds checked effects (#510): no columns.
+                effect_consistency=None,
             )
         )
 
