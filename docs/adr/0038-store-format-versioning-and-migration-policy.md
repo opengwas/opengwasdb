@@ -1,5 +1,12 @@
 # Store format versioning, reader obligations, and migration expectations
 
+> **§1 narrowed by [ADR 0109](0109-splice-analyses-into-and-out-of-a-hybrid-store-release.md) §9**
+> (issue #520; the orchestrator's ruling of 28 Nov 2026): a `provenance` block that only
+> records how a release was made, which no reader needs to decode or answer anything, is
+> compatible and moves no `format_version`. `provenance.converted_from` (#492) and
+> `provenance.lineage` are its instances (spec §21.1). A `provenance` block that a reader
+> interprets is still a compatible change that moves the remainder.
+
 > **§4–§5 narrowed by [ADR 0106](0106-the-5e-8-tier-is-clumped-at-build-time.md) §10**
 > (issue #417; the owner's plan of 23 Nov 2026 on #62): a release is still immutable, and a
 > change to association data or Analytical Metadata still derives a new release, with one
