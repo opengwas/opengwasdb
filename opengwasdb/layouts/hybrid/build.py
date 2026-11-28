@@ -206,9 +206,11 @@ from opengwasdb.variants.routing import (
     LiftedUnion,
     RoutedNames,
     RouteTable,
+    SuppliedCoordinates,
     Unmatched,
     VariantRouting,
     collapse_duplicates,
+    require_observed_provenance,
     route_variants,
 )
 from opengwasdb.variants.routing.keys import raw_site_key
@@ -622,6 +624,9 @@ class _SourceAxis:
     #: Whether Pass 2's unmatched rows are folded onto the axis after it: only when
     #: the routing did not place every source site (`VariantRouting.placed_every_site`).
     folds: bool = False
+    #: The coordinates the sources supplied, recorded from the sites the routing read
+    #: (`VariantRouting.supplied`): what the provenance written may name (#261).
+    supplied: SuppliedCoordinates | None = None
 
 
 @dataclass(frozen=True)
@@ -662,6 +667,9 @@ class _PreparedBuild:
     #: Whether the fold places Pass 2's unmatched rows (`_SourceAxis.folds`). A
     #: build resumed past the fold has none left to place.
     folds: bool = False
+    #: `_SourceAxis.supplied`; None for a build resumed past the fold, whose map was
+    #: checked before it was recorded.
+    supplied: SuppliedCoordinates | None = None
 
 
 @dataclass(frozen=True)
@@ -976,7 +984,7 @@ def _lift_and_partition(
             len(routing.names.rsid_by_alid),
         )
     hg38_to_source = routing.source_alids()
-    partition = _partition_variants(hg38_to_source.keys(), panel_alids, len(manifest_rows))
+    partition = _partition_variants(routing.reached_alids, panel_alids, len(manifest_rows))
     analyses: list[Analysis] = [manifest_row_to_analysis(row) for row in manifest_rows]
     # Building the table consumes the routing's site map, which is freed before Pass 2.
     table = routing.table(
@@ -993,6 +1001,7 @@ def _lift_and_partition(
         lifted_away=routing.lifted_away,
         lift_drops=routing.lift_drops,
         folds=not routing.placed_every_site,
+        supplied=routing.supplied,
     )
 
 
@@ -1417,6 +1426,10 @@ class _FoldInputs:
     #: The off-reference sites a lift collision dropped, by raw key (#325): the
     #: fold counts their rows as `lift_collision`, and the record names each.
     lift_drops: LiftDrops = LiftDrops()
+    #: The coordinates of the keys the fold resolved, which Pass 2 read: what the
+    #: origins it merges into ``hg38_to_source`` may name (#261). None on an axis read
+    #: back from a checkpoint, whose map was checked before it was recorded.
+    supplied: SuppliedCoordinates | None = None
 
 
 def _folded_columns(state: CheckpointState | None) -> frozenset[int]:
@@ -1746,6 +1759,7 @@ def _finalise_reference_partition(
     """
     if not prepared.folds:
         _refuse_off_reference_spills(prepared.spill_dir)
+        _require_written_provenance(prepared, None)
         _record_axis(state, prepared, None)
         return prepared
     recorded = _recorded_axis(state)
@@ -1753,10 +1767,36 @@ def _finalise_reference_partition(
     prepared = _merge_off_reference_rsids(prepared, fold)
     if recorded is not None:
         return _fold_recorded_axis(prepared, options, state, recorded)
+    _require_written_provenance(prepared, fold)
     _record_axis(state, prepared, fold)
     if fold is None:
         return prepared
     return _fold_under(prepared, options, state, fold)
+
+
+def _require_written_provenance(prepared: _PreparedBuild, fold: _FoldInputs | None) -> None:
+    """Refuse a ``source_alid`` map that names a coordinate no source supplied (#261).
+
+    The map checked is the one the release writes: the fold's, which merges the
+    off-reference variants' origins into Pass 1's, or Pass 1's where nothing folds. It
+    is checked against what the sources supplied, recorded from the sites read: the
+    routing's (`VariantRouting.supplied`) and the fold's resolved keys, which Pass 2
+    read. The recorded map is checked before it is recorded, so a resumed run, which
+    reads it back, writes a checked map."""
+    if prepared.supplied is None or (fold is not None and fold.supplied is None):
+        raise ValueError(
+            "build-hybrid: the provenance about to be written has no record of the "
+            "coordinates its sources supplied to be checked against (#261)"
+        )
+    if fold is None:
+        require_observed_provenance(
+            prepared.hg38_to_source, prepared.supplied, where="build-hybrid"
+        )
+        return
+    assert fold.supplied is not None  # narrowed above
+    require_observed_provenance(
+        fold.hg38_to_source, prepared.supplied | fold.supplied, where="build-hybrid"
+    )
 
 
 def _fold_route(fold: _FoldInputs | None) -> Callable[[str], str | None] | None:
@@ -1928,7 +1968,8 @@ def _off_reference_fold_inputs(
             hg38_to_source=prepared.hg38_to_source,
             lifted_away=resolved.lifted_away,
             lift_drops=drops,
-            )
+            supplied=SuppliedCoordinates.of_alids(resolved.origins),
+        )
     table, old_to_new, index, off_panel, shared_sorted = _build_shared_key_table(
         prepared, resolved
     )
@@ -1947,6 +1988,7 @@ def _off_reference_fold_inputs(
         hg38_to_source=_merge_unknown_provenance(prepared.hg38_to_source, resolved),
         lifted_away=resolved.lifted_away,
         lift_drops=drops,
+        supplied=SuppliedCoordinates.of_alids(resolved.origins),
     )
 
 
@@ -2642,6 +2684,7 @@ def _prepare_build(
         lifted_away=axis.lifted_away,
         lift_drops=axis.lift_drops,
         folds=axis.folds,
+        supplied=axis.supplied,
     )
 
 

@@ -105,6 +105,7 @@ from opengwasdb.variants.routing import (
     LiftedUnion,
     RouteTable,
     VariantRouting,
+    require_observed_provenance,
     route_variants,
 )
 from opengwasdb.variants.routing.keys import routing_key
@@ -379,6 +380,11 @@ def _write_axis(
     origin = routing.source_alids()
     source_alids = [origin.get(alid) for alid in axis.alids]
     del origin
+    # A row no source observed has no source coordinate (#261).
+    require_observed_provenance(
+        dict(zip(axis.alids, source_alids, strict=True)), routing.supplied,
+        where="build-dense-vcf",
+    )
     write_variant_axis(staged.path, canonical_variants, rsid_by_alid, source_alids)
 
 

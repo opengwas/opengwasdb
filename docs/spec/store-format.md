@@ -453,9 +453,10 @@ the Ragged Overflow before Pass 2 and nothing is folded, so the release is the o
 two-pass release restricted to the reference's ALIDs, with each listed ALID no source
 reaches stored empty. Names follow the two-pass rule (the first rsid of the sites placed
 on each ALID) when the reference names none, and are the reference's, as given, when it
-names some. A manifest of GRCh38 sources alone is routed by identity, as before, and a
-reference that names its rsids then reads no source. A source declared under any other
-assembly is refused, since neither identity nor the lift places it.
+names some. A manifest of GRCh38 sources alone is routed by identity, as before; Pass 1
+still reads its sources, to say which ALIDs one observed, the only rows with a
+`source_alid` (#261, below). A source declared under any other assembly is refused,
+since neither identity nor the lift places it.
 
 A GWAS Catalog row its harmoniser placed nowhere names no variant (#410). In the
 layout that keeps the study's alleles in the main columns, a row whose `hm_code`
@@ -905,8 +906,28 @@ chromosome's ranges from another's rows, or from none.
 for a lifted row the pre-liftover ALID, for a row its source already placed on the
 release's assembly its own ALID. A row two source variants collided onto (§4 above,
 #85) has none, and so has a row Reference Completion added from the panel, which no
-source observed. Three plain `.npy` files, memory-mappable and read with numpy
-alone, hold it:
+source observed. **Only a row some source observed has one (#261).** A build MUST NOT
+write a `source_alid` for a row no source observed: a single-pass build routed by a
+Variant Reference with no source keys (a plain ALID list, a Store Variant Table) holds
+every ALID the reference lists, and writes `.` for each that no source supplied, as the
+two-pass `--reference-panel` build writes for a panel row no Analysis observed, so the
+two write the same table. To know which, it reads its sources (Pass 1) even when the
+reference names its rsIDs; an observed row's `source_alid` is the own coordinate of the
+source sites that reached it by the routing Pass 2 uses (matched by Routing Key, or
+lifted, #260), never the reference's identity. An extraction artifact's source keys
+are coordinates its sources supplied, and are its rows' `source_alid` as before.
+`build-dense-vcf` and `build-hybrid` refuse a map they are about to write that names a
+`source_alid` no source supplied (`require_observed_provenance`). The check is kept apart
+from what it checks: it reads the coordinates recorded from the sites read (Pass 1's
+union, an artifact's source keys, the Hybrid fold's resolved keys:
+`SuppliedCoordinates`), never the routing's record of what was observed, so a fault in
+that record is refused too; `build-hybrid` checks the map after the fold merges in the
+off-reference origins, the one it writes; and a plain reference whose routing records
+no observation is refused outright. There is no `validate` rule: a release cannot tell an unobserved row from an observed one whose every
+association Admission dropped, which also holds none. A release built before #261 from
+a plain reference (OGS-00005's 8 Oct 2026 rebuild: 600,977 Dense Component rows) names
+such rows by their own ALID. Three plain `.npy` files, memory-mappable and read with
+numpy alone, hold it:
 
 | file | dtype | length | holds |
 |---|---|---|---|
