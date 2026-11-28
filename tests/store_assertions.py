@@ -1,19 +1,26 @@
-"""Shared assertions for serial-versus-parallel band-write comparisons.
+"""Shared assertions that two Stores built two ways hold the same data.
 
 Epic #217's band-write tickets (issue #220 and its siblings) each build a
 serial release and a parallel one and assert they are identical. The
 comparison is the same shape in the Dense and Hybrid suites, so it lives here
-rather than as copies the duplication gate would rightly flag.
+rather than as copies the duplication gate would rightly flag. So does the
+whole-Store Hybrid comparison (`assert_hybrid_stores_match`) the single-pass,
+checkpoint, rsid-conflict and plain-list suites judge a build by.
 """
 
 from __future__ import annotations
 
+import gzip
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from opengwasdb.query import query_store
 from opengwasdb.store.arrays import create_array
+from opengwasdb.store.open import open_store
 from opengwasdb.store_reader.layout import ArrayRole
+from opengwasdb.validation import validate_store
 
 #: The arrays the Dense Component band write owns. A residual `eaf` build also
 #: carries the baseline and exception tables; a `float32` or `absent` one does
@@ -80,3 +87,40 @@ def assert_same_top_hits(before: Any, after: Any, names: tuple[str, ...]) -> Non
                 after[f"top_hits/{key}"][name][:],
                 err_msg=f"top_hits/{key}/{name}",
             )
+
+
+def assert_hybrid_stores_match(reference: Path, candidate: Path) -> None:
+    """Every stored data artifact matches: variant tables, dense matrix,
+    overflow CSR, top hits and analyses.tsv (manifest timestamps excluded)."""
+    assert validate_store(candidate).ok, validate_store(candidate).errors
+
+    for name in ("variants.tsv.gz",):
+        with gzip.open(reference / name, "rt", encoding="utf-8") as handle:
+            left = handle.read()
+        with gzip.open(candidate / name, "rt", encoding="utf-8") as handle:
+            right = handle.read()
+        assert left == right, name
+
+    np.testing.assert_array_equal(
+        np.load(reference / "dense" / "dense_to_shared.npy"),
+        np.load(candidate / "dense" / "dense_to_shared.npy"),
+    )
+    ref_store = open_store(reference)
+    cand_store = open_store(candidate)
+    ref_dense = ref_store.dense_component().arrays(mode="r")
+    cand_dense = cand_store.dense_component().arrays(mode="r")
+    for name in ("z", "se"):
+        np.testing.assert_array_equal(ref_dense[name][:], cand_dense[name][:])
+    ref_ragged = ref_store.arrays(mode="r")["ragged"]
+    cand_ragged = cand_store.arrays(mode="r")["ragged"]
+    for name in ("offsets", "variant_index", "z", "se"):
+        np.testing.assert_array_equal(ref_ragged[name][:], cand_ragged[name][:])
+
+    with query_store(reference) as left_q, query_store(candidate) as right_q:
+        for threshold in (5e-4, 5e-6, 5e-8):
+            left_hits = left_q.top_hits(threshold=threshold)
+            right_hits = right_q.top_hits(threshold=threshold)
+            for field in ("variant_index", "analysis_index", "z", "se"):
+                np.testing.assert_array_equal(left_hits[field], right_hits[field])
+
+    assert (reference / "analyses.tsv").read_text() == (candidate / "analyses.tsv").read_text()

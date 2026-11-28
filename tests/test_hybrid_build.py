@@ -31,7 +31,11 @@ from liftover_fixtures import (
     strand_vcf_rows,
     write_two_strand_chain,
 )
-from store_assertions import assert_same_band_arrays, assert_same_top_hits
+from store_assertions import (
+    assert_hybrid_stores_match,
+    assert_same_band_arrays,
+    assert_same_top_hits,
+)
 from unknown_key_oracle import encode_keys
 
 from opengwasdb.admission import admission_record_for
@@ -1215,43 +1219,6 @@ def _dense_records(store: Path) -> list:
         axis.close()
 
 
-def _assert_hybrid_stores_match(reference: Path, candidate: Path) -> None:
-    """Every stored data artifact matches: variant tables, dense matrix,
-    overflow CSR, top hits and analyses.tsv (manifest timestamps excluded)."""
-    assert validate_store(candidate).ok, validate_store(candidate).errors
-
-    for name in ("variants.tsv.gz",):
-        with gzip.open(reference / name, "rt", encoding="utf-8") as handle:
-            left = handle.read()
-        with gzip.open(candidate / name, "rt", encoding="utf-8") as handle:
-            right = handle.read()
-        assert left == right, name
-
-    np.testing.assert_array_equal(
-        np.load(reference / "dense" / "dense_to_shared.npy"),
-        np.load(candidate / "dense" / "dense_to_shared.npy"),
-    )
-    ref_store = open_store(reference)
-    cand_store = open_store(candidate)
-    ref_dense = ref_store.dense_component().arrays(mode="r")
-    cand_dense = cand_store.dense_component().arrays(mode="r")
-    for name in ("z", "se"):
-        np.testing.assert_array_equal(ref_dense[name][:], cand_dense[name][:])
-    ref_ragged = ref_store.arrays(mode="r")["ragged"]
-    cand_ragged = cand_store.arrays(mode="r")["ragged"]
-    for name in ("offsets", "variant_index", "z", "se"):
-        np.testing.assert_array_equal(ref_ragged[name][:], cand_ragged[name][:])
-
-    with query_store(reference) as left_q, query_store(candidate) as right_q:
-        for threshold in (5e-4, 5e-6, 5e-8):
-            left_hits = left_q.top_hits(threshold=threshold)
-            right_hits = right_q.top_hits(threshold=threshold)
-            for field in ("variant_index", "analysis_index", "z", "se"):
-                np.testing.assert_array_equal(left_hits[field], right_hits[field])
-
-    assert (reference / "analyses.tsv").read_text() == (candidate / "analyses.tsv").read_text()
-
-
 def _assert_hybrid_build_fails_naming_keys(
     manifest: Path, store: Path, reference: Path, *keys: str
 ) -> None:
@@ -1446,7 +1413,7 @@ class TestVariantReference:
         assert result.n_panel == 2
         assert result.n_off_panel == 1
         assert result.n_overflow == 1
-        _assert_hybrid_stores_match(two_pass, single_pass)
+        assert_hybrid_stores_match(two_pass, single_pass)
 
     def test_panel_only_reference_lifts_off_reference_during_pass2(self, tmp_path, monkeypatch):
         """A panel-only reference names only the Dense axis; the off-panel hg19
@@ -1473,7 +1440,7 @@ class TestVariantReference:
         assert result.n_panel == 2
         assert result.n_off_panel == 1
         assert result.n_overflow == 1
-        _assert_hybrid_stores_match(two_pass, single_pass)
+        assert_hybrid_stores_match(two_pass, single_pass)
 
     def test_off_panel_and_off_reference_overflow_indices_are_remapped(self, tmp_path):
         """B1: a partial reference plus a strict-subset panel writes on-reference
@@ -1526,7 +1493,7 @@ class TestVariantReference:
         assert result.n_panel == 1
         assert result.n_off_panel == 3
         assert result.n_overflow == 3
-        _assert_hybrid_stores_match(two_pass, single_pass)
+        assert_hybrid_stores_match(two_pass, single_pass)
 
         with query_store(single_pass) as q:
             assert q.lookup([HG38_ALID_1], ["trait_a"])["z"][0] == pytest.approx(-4.0, rel=5e-3)
@@ -2276,7 +2243,7 @@ class TestVariantReferenceRsids:
         assert _hybrid_axis_rsids(single_pass) == expected
         assert (result.n_panel, result.n_off_panel) == (2, 2)
         assert validate_store(single_pass).ok
-        _assert_hybrid_stores_match(two_pass, single_pass)
+        assert_hybrid_stores_match(two_pass, single_pass)
 
     def test_named_off_reference_row_without_an_association_is_not_stored(self, tmp_path):
         """The axis-composition difference, pinned (issue #255, round 2). A named
@@ -2789,16 +2756,21 @@ def test_single_pass_off_reference_lift_refuses_to_store_unoriented_statistics(t
     stored under the projected alleles carrying the source's sign. Until the fold
     carries the lift's orientation, that build must fail rather than publish it.
 
-    The reference names only the forward variant, so both chr2 rows -- the
-    reverse-strand pair -- are off-reference and reach the fold's lift."""
+    The reference is an artifact that routes only the forward variant, so both chr2
+    rows -- the reverse-strand pair -- are off-reference and reach the fold's lift. (A
+    plain list routes every hg19 row by Pass 1's lift, which orients it: issue #260.)"""
     from residual_fixtures import write_gwas_vcf_with_eaf
 
     from opengwasdb.layouts.hybrid.key_table import UnorientedOffReferenceLiftError
+    from opengwasdb.variants.reference import write_variant_reference
 
     vcf = write_gwas_vcf_with_eaf(tmp_path / "strand.vcf", strand_vcf_rows())
     manifest = make_manifest(tmp_path, [("trait", vcf, "Trait")])
-    reference = tmp_path / "axis.alid.txt"
-    reference.write_text("3:1000:A:G\n", encoding="utf-8")
+    reference = tmp_path / "axis.variant-ref.tsv.gz"
+    write_variant_reference(
+        reference, ["3:1000:A:G"], {("3", 1_000, "G", "A"): "3:1000:A:G"}, {"3:1000:A:G": "rs3"},
+        reoriented=(),
+    )
     store_path = tmp_path / "store.opengwasdb"
 
     with pytest.raises(UnorientedOffReferenceLiftError, match="2:1000:G:A"):

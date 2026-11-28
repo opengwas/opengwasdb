@@ -8,12 +8,14 @@ and every lift goes through a chain whose strands are known by construction
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 import pytest
 from liftover_fixtures import (
     write_collision_chain,
+    write_identity_collision_chain,
     write_reverse_collision_chain,
     write_two_strand_chain,
 )
@@ -543,6 +545,110 @@ def test_a_source_the_reference_routes_under_another_case_is_not_recorded_as_dro
 
     assert [d.source_key for d in routing.lift_drops.sources] == ["1:1001:A:G"]
     assert routing.lift_drops.keys == {"1:1001:A:G"}
+
+
+def _identity_reference(alids: list[str], rsid_by_alid: dict[str, str]) -> VariantReference:
+    """A reference with no source keys, as a Store Variant Table reads (#260)."""
+    lookup = {(c, int(p), a, b): alid for alid in alids for c, p, a, b in [alid.split(":")]}
+    lookup |= {(c, int(p), b, a): alid for alid in alids for c, p, a, b in [alid.split(":")]}
+    return VariantReference(alids, lookup, rsid_by_alid, False, frozenset())
+
+
+def test_a_reference_with_no_source_keys_lifts_an_hg19_source_and_keeps_its_names(tmp_path):
+    """hg19 2:1000 G>A lifts onto the reverse strand to 2:999001:C:T. A Store Variant
+    Table that names its rsids and also lists 2:1000:A:G routes the row by the lift, not
+    by its own coordinate, re-oriented; the names are the reference's, as given (#260)."""
+    chain = write_two_strand_chain(tmp_path / "strands.chain")
+    source = _source("a", "hg19", [("2", 1_000, "G", "A", "rsSOURCE")])
+    reference = _identity_reference(["2:1000:A:G", "2:999001:C:T"], {"2:999001:C:T": "rsREF"})
+    assert reference.source_lookup[("2", 1_000, "G", "A")] == "2:1000:A:G", "fixture: the trap"
+
+    routing = _route([source], FromReference(reference, chain))
+
+    assert routing.placed_every_site
+    assert routing.alids == ["2:1000:A:G", "2:999001:C:T"]
+    assert routing.names.reference_named
+    assert routing.names.rsid_by_alid == {"2:999001:C:T": "rsREF"}
+    column = routing.table([routing.alids]).route_column(
+        [_association(("2", 1_000, "G", "A"), 1.0)]
+    )
+    assert column.placed[0].index.tolist() == [1]
+    assert column.placed[0].z.tolist() == [-1.0], "re-oriented by the reverse strand"
+
+
+def test_a_reference_with_no_source_keys_routes_grch38_sources_by_identity():
+    """With no hg19 source nothing is lifted, and no source is read for the axis."""
+    reference = _identity_reference(["1:100:A:G"], {"1:100:A:G": "rsREF"})
+
+    def _no_read(_spec: SourceSpec) -> FakeReader:
+        raise AssertionError("an all-GRCh38 build against a named reference read a source")
+
+    spec = SourceSpec("a", "a", "fake", "hg38", StoredEffectScale.SD)
+    routing = route_variants([spec], FromReference(reference), readers=_no_read)
+
+    assert not routing.placed_every_site
+    assert routing.names.rsid_by_alid == {"1:100:A:G": "rsREF"}
+
+
+def test_a_reference_with_no_source_keys_refuses_a_source_of_another_assembly():
+    """Neither identity nor the hg19 lift places a source declared hg18 (#260)."""
+    reference = _identity_reference(["1:100:A:G"], {})
+    source = _source("a", "hg18", [("1", 100, "A", "G", "")])
+    with pytest.raises(ValueError, match="'hg18'"):
+        _route([source], FromReference(reference))
+
+
+def test_an_artifact_routing_two_lifted_loci_to_one_alid_routes_neither(tmp_path):
+    """An artifact frozen before #325 routes hg19 501 and 1001 to 1:5501:A:G; a GRCh38
+    source's own key at an ALID is one variant from two builds, and is kept (#85). The
+    reference names its rsids, so Pass 1 reads nothing: the artifact says what collided,
+    and the chain only that 1:6001 is not an hg19 coordinate it leaves in place."""
+    lookup = {
+        ("1", 501, "A", "G"): "1:5501:A:G",
+        ("1", 1_001, "A", "G"): "1:5501:A:G",
+        ("1", 6_001, "C", "T"): CLEAN,
+        ("1", 1_501, "C", "T"): CLEAN,
+    }
+    reference = replace(_reference(lookup), rsid_by_alid={CLEAN: "rsC"})
+    hg19 = _source("b", "hg19", [("1", 501, "A", "G", ""), ("1", 1_001, "A", "G", "")])
+    hg38 = _source("a", "hg38", [("1", 6_001, "C", "T", "")])
+
+    routing = _route([hg38, hg19], FromReference(reference))
+
+    assert routing.alids == ["1:5501:A:G", CLEAN], "the reference keeps its ALIDs"
+    assert sorted(routing.lift_drops.keys) == ["1:1001:A:G", "1:501:A:G"]
+    assert {d.alid for d in routing.lift_drops.sources} == {"1:5501:A:G"}
+    assert routing.source_alids() == {CLEAN: None}
+
+
+@pytest.mark.parametrize(
+    ("write_chain", "dropped"),
+    [
+        pytest.param(write_identity_collision_chain, ["1:501:A:G", "1:5501:A:G"], id="kept"),
+        pytest.param(write_collision_chain, [], id="moved"),
+    ],
+)
+def test_an_artifact_key_at_its_own_locus_is_lifted_where_the_chain_keeps_it(
+    tmp_path, write_chain, dropped
+):
+    """A mixed manifest's artifact routes hg19 501 (lifted to 5501) and 1:5501:A:G to
+    1:5501:A:G. The artifact cannot say which assembly spelled the second key. Where the
+    chain leaves hg19 5501 at 5501, it is a second lifted locus and both are dropped;
+    where the chain places hg19 5501 elsewhere, it is a GRCh38 key and both route."""
+    lookup = {
+        ("1", 501, "A", "G"): "1:5501:A:G",
+        ("1", 5_501, "A", "G"): "1:5501:A:G",
+        ("1", 9_001, "A", "C"): "1:9001:A:C",
+    }
+    reference = replace(_reference(lookup), rsid_by_alid={"1:9001:A:C": "rs9001"})
+    hg19 = _source("b", "hg19", [("1", 501, "A", "G", ""), ("1", 5_501, "A", "G", "")])
+    hg38 = _source("a", "hg38", [("1", 9_001, "A", "C", "")])
+
+    routing = _route([hg38, hg19], FromReference(reference, write_chain(tmp_path / "c")))
+
+    assert sorted(routing.lift_drops.keys) == dropped
+    routed = {"1:9001:A:C"} | (set() if dropped else {"1:5501:A:G"})
+    assert set(routing.source_alids()) == routed
 
 
 # ── RouteTable ───────────────────────────────────────────────────────────────

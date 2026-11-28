@@ -204,8 +204,12 @@ def _lift_hg19(
 LiftCollisions = dict[str, tuple[SourceKey, ...]]
 
 
-def _find_collisions(lookup: Mapping[SourceKey, str]) -> LiftCollisions:
+def find_lift_collisions(lookup: Mapping[SourceKey, str]) -> LiftCollisions:
     """The ALIDs that sites of two or more source loci reach, with those sites.
+
+    ``lookup`` is a lifted group's placement, which the caller holds to lifted sites
+    alone: a GRCh38 source's variant at an ALID is that variant seen from another
+    build, not a second locus (issue #85).
 
     A locus is a source ``(contig, position)``. The sites ``A:G`` and ``G:A`` at one
     position are one locus, which the canonical ALID merges; sites at two positions
@@ -242,7 +246,7 @@ def require_one_locus_per_alid(lookup: Mapping[SourceKey, str], *, where: str) -
     identity and rsid, and nothing downstream could tell. ``where`` names the
     caller in the refusal. `place_sites` drops collisions by the same scan, so the
     map it returns passes by construction."""
-    collisions = _find_collisions(lookup)
+    collisions = find_lift_collisions(lookup)
     if collisions:
         alid, sites = next(iter(collisions.items()))
         raise ValueError(
@@ -263,7 +267,7 @@ def _drop_collisions(
     is not knowable from the chain, and keeping either would attach its statistics
     to the other's rsid. A precedent is `_drop_cross_assembly_collisions`'
     both-assembly drop."""
-    collisions = _find_collisions(lookup)
+    collisions = find_lift_collisions(lookup)
     dropped = collided_sites(collisions)
     for site in dropped:
         del lookup[site]
